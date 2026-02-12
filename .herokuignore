@@ -1,5 +1,11 @@
-data.json
-bot.log
-*.log
+node_modules/
 .wwebjs_auth/
 .wwebjs_cache/
+.env
+*.log
+.DS_Store
+package-lock.json
+npm-debug.log
+.vscode/
+.idea/
+*.swp
