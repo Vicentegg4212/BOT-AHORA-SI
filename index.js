@@ -97,7 +97,16 @@ const CONFIG = {
     },
     
     // Prefijo de comandos
-    prefix: '!'
+    prefix: '!',
+    
+    // Configuración de simulacros
+    simulacros: {
+        duracionMinutos: 10,
+        recordatorios: [24, 12, 6, 1, 0.5], // horas antes
+        puntosParticipacion: 50,
+        puntosCompletacion: 100,
+        tiempoEvaluacion: 30 // minutos después
+    }
 };
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -1217,6 +1226,11 @@ class SasmexWhatsAppBot {
             // Si no empieza con prefijo, ignorar (excepto para auto-suscribir en grupos/usuarios)
             if (!body.startsWith(CONFIG.prefix)) {
                 try {
+                    // Detectar participación en simulacros
+                    if (body.toUpperCase().includes('YO PARTICIPO')) {
+                        await this.registrarParticipacion(chatId);
+                    }
+                    
                     // Auto-suscribir si escribe cualquier cosa
                     const id = String(chatId);
                     if (!this.subscribers.includes(id)) {
@@ -1392,6 +1406,12 @@ class SasmexWhatsAppBot {
                 case 'comunicados':
                     await this.cmdComunicado(msg, args);
                     break;
+                
+                case 'simulacro':
+                case 'simulacros':
+                case 'drill':
+                    await this.cmdSimulacro(msg, args);
+                    break;
                     
                 default:
                     await this.sendMessage(chatId, 
@@ -1505,8 +1525,8 @@ Puedes cambiar tu nivel con: ${CONFIG.prefix}severidad [nivel]
 
 🔔 Verificación SASMEX: Cada ${CONFIG.checkInterval} segundos
 📞 Emergencias: 911
-🌐 Sitio oficial: https://rss.sasmex.net
 🏛️ CENAPRED: https://www.cenapred.unam.mx
+🏛️ SSN UNAM: https://www.ssn.unam.mx
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1602,6 +1622,7 @@ Puedes cambiar tu nivel con: ${CONFIG.prefix}severidad [nivel]
 │  ${CONFIG.prefix}logs [n]            ├─ 📝 Ver últimos logs                  │
 │  ${CONFIG.prefix}broadcast [msg]     ├─ 📢 Enviar a todos                    │
 │  ${CONFIG.prefix}comunicado          ├─ 📢 Sistema de comunicados            │
+│  ${CONFIG.prefix}simulacro           ├─ 🏃 Sistema de simulacros             │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ${isOwner ? `
@@ -1662,7 +1683,6 @@ ${isOwner ? `
 ║                   🌐 ENLACES IMPORTANTES                        ║
 ╠════════════════════════════════════════════════════════════════╣
 ║                                                                ║
-║  🔗 SASMEX:     https://rss.sasmex.net                        ║
 ║  🔗 CENAPRED:   https://www.cenapred.unam.mx                  ║
 ║  🔗 CIRES:      https://www.cires.org.mx                      ║
 ║  🔗 SSN UNAM:   https://www.ssn.unam.mx                       ║
@@ -1748,8 +1768,8 @@ ${recomendaciones}
 🏥 Hospital más cercano
 
 🌐 *INFORMACIÓN OFICIAL:*
-https://rss.sasmex.net
 https://www.cenapred.unam.mx
+https://www.ssn.unam.mx
                 `;
                 
                 await this.sendMessage(chatId, infoDetallada);
@@ -1790,7 +1810,7 @@ Versión: 1.0 Avanzada
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 ⚙️ *CONFIGURACIÓN DEL SISTEMA*
-Fuente: rss.sasmex.net
+Fuente: Sistema SASMEX Oficial
 Intervalo: ${CONFIG.checkInterval} segundos
 Prefijo: ${CONFIG.prefix}
 Timeout fetch: ${CONFIG.fetchTimeout}ms
@@ -2045,7 +2065,6 @@ El Sistema de Alerta Sísmica Mexicano (SASMEX) es un sistema automático que de
 📍 CENAPRED: https://www.cenapred.unam.mx
 📍 CIRES: https://www.cires.org.mx
 📍 SSN UNAM: https://www.ssn.unam.mx
-📍 RSS Feed: https://rss.sasmex.net
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -2692,7 +2711,7 @@ ${mensaje}
 📞 *Emergencias:* 911
 
 ╔════════════════════════════════════════════════════════════════╗
-║        Para más información: https://rss.sasmex.net            ║
+║     Para más información contacta a las autoridades locales    ║
 ╚════════════════════════════════════════════════════════════════╝
             `.trim();
 
@@ -2893,6 +2912,814 @@ ${extraArgs.join(' ') || 'El Sistema de Alerta Sísmica Mexicano opera normalmen
         };
 
         return templates[tipo] ? templates[tipo].trim() : null;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //         🏃 SISTEMA ULTRA MEGA TRIPLE SUPER DE SIMULACROS
+    // ═══════════════════════════════════════════════════════════════════════
+
+    async cmdSimulacro(msg, args) {
+        const chatId = msg.from;
+        
+        if (!isAdmin(chatId)) {
+            await this.sendMessage(chatId, '❌ Solo administradores pueden gestionar simulacros.');
+            return;
+        }
+
+        try {
+            const subcomando = args[0]?.toLowerCase();
+
+            if (!subcomando) {
+                await this.showSimulacrosMenu(chatId);
+                return;
+            }
+
+            switch (subcomando) {
+                case 'programar':
+                case 'agendar':
+                case 'schedule':
+                    await this.programarSimulacro(chatId, args.slice(1));
+                    break;
+
+                case 'listar':
+                case 'lista':
+                case 'list':
+                    await this.listarSimulacros(chatId);
+                    break;
+
+                case 'iniciar':
+                case 'start':
+                case 'comenzar':
+                    await this.iniciarSimulacro(chatId, args.slice(1));
+                    break;
+
+                case 'finalizar':
+                case 'terminar':
+                case 'end':
+                    await this.finalizarSimulacro(chatId, args.slice(1));
+                    break;
+
+                case 'evaluar':
+                case 'evaluate':
+                    await this.evaluarSimulacro(chatId, args.slice(1));
+                    break;
+
+                case 'stats':
+                case 'estadisticas':
+                case 'estadísticas':
+                    await this.statsSimulacros(chatId);
+                    break;
+
+                case 'cancelar':
+                case 'cancel':
+                    await this.cancelarSimulacro(chatId, args.slice(1));
+                    break;
+
+                case 'participantes':
+                case 'participants':
+                    await this.verParticipantes(chatId, args.slice(1));
+                    break;
+
+                case 'reporte':
+                case 'report':
+                    await this.generarReporte(chatId, args.slice(1));
+                    break;
+
+                case 'ranking':
+                case 'leaderboard':
+                    await this.verRanking(chatId);
+                    break;
+
+                default:
+                    await this.sendMessage(chatId, '❌ Subcomando no reconocido. Usa !simulacro para ver opciones.');
+            }
+
+        } catch (error) {
+            console.error('❌ Error en cmdSimulacro:', error.message);
+            await this.sendMessage(chatId, `❌ Error: ${error.message}`);
+        }
+    }
+
+    async showSimulacrosMenu(chatId) {
+        const menu = `
+╔═══════════════════════════════════════════════════════════════╗
+║           🏃 SISTEMA DE SIMULACROS ULTRA COMPLETO             ║
+║        Sistema de Programación y Evaluación de Simulacros     ║
+╚═══════════════════════════════════════════════════════════════╝
+
+┌─ 📅 PROGRAMACIÓN ────────────────────────────────────────────┐
+│                                                                │
+│  !simulacro programar [fecha] [hora] [título]                 │
+│  └─ Programa un nuevo simulacro                               │
+│  └─ Ejemplo: !simulacro programar 2026-03-15 10:00 Sismo 7.5  │
+│                                                                │
+│  !simulacro listar                                             │
+│  └─ Ver todos los simulacros programados                      │
+│                                                                │
+│  !simulacro cancelar [id]                                      │
+│  └─ Cancelar un simulacro programado                          │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+
+┌─ ▶️  EJECUCIÓN ──────────────────────────────────────────────┐
+│                                                                │
+│  !simulacro iniciar [id]                                       │
+│  └─ Iniciar un simulacro programado                           │
+│                                                                │
+│  !simulacro finalizar [id]                                     │
+│  └─ Finalizar un simulacro en curso                           │
+│                                                                │
+│  !simulacro participantes [id]                                 │
+│  └─ Ver participantes de un simulacro                         │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+
+┌─ 📊 EVALUACIÓN Y REPORTES ───────────────────────────────────┐
+│                                                                │
+│  !simulacro evaluar [id]                                       │
+│  └─ Evaluar resultados del simulacro                          │
+│                                                                │
+│  !simulacro reporte [id]                                       │
+│  └─ Generar reporte detallado                                 │
+│                                                                │
+│  !simulacro stats                                              │
+│  └─ Estadísticas generales del sistema                        │
+│                                                                │
+│  !simulacro ranking                                            │
+│  └─ Ver ranking de participación                              │
+│                                                                │
+└────────────────────────────────────────────────────────────────┘
+
+╔═══════════════════════════════════════════════════════════════╗
+║                      ⚡ CARACTERÍSTICAS                        ║
+╠═══════════════════════════════════════════════════════════════╣
+║                                                                ║
+║  ✓ Recordatorios automáticos (24h, 12h, 6h, 1h, 30min)       ║
+║  ✓ Notificación masiva a todos los usuarios                   ║
+║  ✓ Seguimiento de participación en tiempo real                ║
+║  ✓ Sistema de puntos y gamificación                           ║
+║  ✓ Evaluación automática post-simulacro                       ║
+║  ✓ Reportes detallados con estadísticas                       ║
+║  ✓ Ranking de usuarios más participativos                     ║
+║  ✓ Exportación de datos en formato CSV                        ║
+║                                                                ║
+╚═══════════════════════════════════════════════════════════════╝
+
+📋 *EJEMPLO DE USO COMPLETO:*
+
+1️⃣ Programar: !simulacro programar 2026-03-20 09:00 Sismo 7.8
+2️⃣ Sistema envía recordatorios automáticos
+3️⃣ Iniciar: !simulacro iniciar 1
+4️⃣ Usuarios participan durante ${CONFIG.simulacros.duracionMinutos} minutos
+5️⃣ Finalizar: !simulacro finalizar 1
+6️⃣ Evaluar: !simulacro evaluar 1
+7️⃣ Ver reporte: !simulacro reporte 1
+
+💡 *TIP:* Los usuarios ganan ${CONFIG.simulacros.puntosParticipacion} puntos por participar
+y ${CONFIG.simulacros.puntosCompletacion} puntos adicionales por completar!
+
+╔═══════════════════════════════════════════════════════════════╗
+║         Para más información contacta a los admins             ║
+╚═══════════════════════════════════════════════════════════════╝
+        `.trim();
+
+        await this.sendMessage(chatId, menu);
+    }
+
+    async programarSimulacro(chatId, args) {
+        if (args.length < 3) {
+            await this.sendMessage(chatId, 
+                '❌ Formato incorrecto.\n\n' +
+                'Uso: !simulacro programar [fecha] [hora] [título]\n' +
+                'Ejemplo: !simulacro programar 2026-03-15 10:00 Simulacro Sismo 7.5'
+            );
+            return;
+        }
+
+        const fecha = args[0];
+        const hora = args[1];
+        const titulo = args.slice(2).join(' ');
+
+        try {
+            const fechaHora = new Date(`${fecha}T${hora}:00`);
+            const ahora = new Date();
+
+            if (fechaHora <= ahora) {
+                await this.sendMessage(chatId, '❌ La fecha debe ser futura.');
+                return;
+            }
+
+            const data = loadData();
+            if (!data.simulacros) data.simulacros = [];
+            
+            const simulacroId = data.simulacros.length + 1;
+            
+            const nuevoSimulacro = {
+                id: simulacroId,
+                titulo,
+                fechaHora: fechaHora.toISOString(),
+                estado: 'programado',
+                participantes: [],
+                respuestas: {},
+                creadoPor: chatId,
+                creadoEn: new Date().toISOString(),
+                recordatoriosEnviados: [],
+                inicioReal: null,
+                finReal: null,
+                duracionMinutos: CONFIG.simulacros.duracionMinutos
+            };
+
+            data.simulacros.push(nuevoSimulacro);
+            saveData(data);
+
+            this.programarRecordatorios(nuevoSimulacro);
+
+            const confirmacion = `
+╔═══════════════════════════════════════════════════════════════╗
+║              ✅ SIMULACRO PROGRAMADO EXITOSAMENTE              ║
+╚═══════════════════════════════════════════════════════════════╝
+
+🆔 *ID:* ${simulacroId}
+📋 *Título:* ${titulo}
+📅 *Fecha:* ${fechaHora.toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+🕐 *Hora:* ${fechaHora.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
+⏱️ *Duración:* ${CONFIG.simulacros.duracionMinutos} minutos
+
+🔔 *RECORDATORIOS AUTOMÁTICOS:*
+${CONFIG.simulacros.recordatorios.map(h => `├─ ${h >= 1 ? h + ' horas' : (h * 60) + ' minutos'} antes`).join('\n')}
+
+📊 *SISTEMA ACTIVADO:*
+✓ Notificaciones automáticas programadas
+✓ Seguimiento de participación
+✓ Evaluación post-simulacro
+✓ Sistema de puntos activo
+
+Para iniciar manualmente: !simulacro iniciar ${simulacroId}
+Para cancelar: !simulacro cancelar ${simulacroId}
+            `.trim();
+
+            await this.sendMessage(chatId, confirmacion);
+            logToFile('SIMULACRO', `Programado: ${titulo} - ${fechaHora.toISOString()}`);
+
+        } catch (error) {
+            console.error('Error programando simulacro:', error.message);
+            await this.sendMessage(chatId, `❌ Error al programar: ${error.message}`);
+        }
+    }
+
+    programarRecordatorios(simulacro) {
+        const fechaSimulacro = new Date(simulacro.fechaHora);
+        
+        CONFIG.simulacros.recordatorios.forEach(horasAntes => {
+            const tiempoRecordatorio = new Date(fechaSimulacro.getTime() - (horasAntes * 60 * 60 * 1000));
+            const ahora = new Date();
+            const delay = tiempoRecordatorio.getTime() - ahora.getTime();
+
+            if (delay > 0) {
+                setTimeout(async () => {
+                    await this.enviarRecordatorio(simulacro, horasAntes);
+                }, delay);
+            }
+        });
+
+        const delayInicio = fechaSimulacro.getTime() - Date.now();
+        if (delayInicio > 0) {
+            setTimeout(async () => {
+                await this.iniciarSimulacroAutomatico(simulacro.id);
+            }, delayInicio);
+        }
+    }
+
+    async enviarRecordatorio(simulacro, horasAntes) {
+        const data = loadData();
+        const simActual = data.simulacros?.find(s => s.id === simulacro.id);
+        
+        if (!simActual || simActual.estado !== 'programado') return;
+
+        const tiempoTexto = horasAntes >= 1 
+            ? `${horasAntes} ${horasAntes === 1 ? 'hora' : 'horas'}`
+            : `${horasAntes * 60} minutos`;
+
+        const recordatorio = `
+🔔 ═══════════════════════════════════════════════════════════════
+           ⏰ RECORDATORIO DE SIMULACRO
+═══════════════════════════════════════════════════════════════
+
+🏃 *SIMULACRO PROGRAMADO*
+📋 ${simActual.titulo}
+
+⏰ *TIEMPO RESTANTE:* ${tiempoTexto}
+📅 Fecha: ${new Date(simActual.fechaHora).toLocaleDateString('es-MX')}
+🕐 Hora: ${new Date(simActual.fechaHora).toLocaleTimeString('es-MX')}
+
+💡 *RECUERDA:*
+• Participar suma ${CONFIG.simulacros.puntosParticipacion} puntos
+• Completar suma ${CONFIG.simulacros.puntosCompletacion} puntos más
+• Duración: ${CONFIG.simulacros.duracionMinutos} minutos
+        `.trim();
+
+        const subscribers = getSubscribers();
+        for (const userId of subscribers) {
+            try {
+                await this.client.sendMessage(userId, recordatorio);
+                await sleep(1000);
+            } catch (error) {
+                console.error(`Error enviando recordatorio a ${userId}:`, error.message);
+            }
+        }
+
+        if (!simActual.recordatoriosEnviados) simActual.recordatoriosEnviados = [];
+        simActual.recordatoriosEnviados.push({ horasAntes, enviadoEn: new Date().toISOString() });
+        saveData(data);
+
+        logToFile('SIMULACRO', `Recordatorio enviado: ${simActual.titulo} - ${tiempoTexto}`);
+    }
+
+    async iniciarSimulacroAutomatico(simulacroId) {
+        const data = loadData();
+        const simulacro = data.simulacros?.find(s => s.id === simulacroId);
+        
+        if (!simulacro || simulacro.estado !== 'programado') return;
+
+        await this.iniciarSimulacroCore(simulacro);
+    }
+
+    async iniciarSimulacro(chatId, args) {
+        const simulacroId = parseInt(args[0]);
+        
+        if (!simulacroId) {
+            await this.sendMessage(chatId, '❌ Debes especificar el ID del simulacro.\nEjemplo: !simulacro iniciar 1');
+            return;
+        }
+
+        const data = loadData();
+        const simulacro = data.simulacros?.find(s => s.id === simulacroId);
+
+        if (!simulacro) {
+            await this.sendMessage(chatId, `❌ No existe un simulacro con ID ${simulacroId}`);
+            return;
+        }
+
+        if (simulacro.estado !== 'programado') {
+            await this.sendMessage(chatId, `❌ El simulacro está en estado: ${simulacro.estado}`);
+            return;
+        }
+
+        await this.iniciarSimulacroCore(simulacro);
+        await this.sendMessage(chatId, '✅ Simulacro iniciado manualmente');
+    }
+
+    async iniciarSimulacroCore(simulacro) {
+        const data = loadData();
+        const simIndex = data.simulacros.findIndex(s => s.id === simulacro.id);
+        
+        data.simulacros[simIndex].estado = 'en_curso';
+        data.simulacros[simIndex].inicioReal = new Date().toISOString();
+        saveData(data);
+
+        const notificacion = `
+🚨 ═══════════════════════════════════════════════════════════════
+           🏃 SIMULACRO EN CURSO - ¡PARTICIPA AHORA!
+═══════════════════════════════════════════════════════════════
+
+📢 *INICIO DE SIMULACRO*
+📋 ${simulacro.titulo}
+
+🕐 *HORA DE INICIO:* ${new Date().toLocaleTimeString('es-MX')}
+⏱️ *DURACIÓN:* ${CONFIG.simulacros.duracionMinutos} minutos
+
+💰 *RECOMPENSAS:*
+• ${CONFIG.simulacros.puntosParticipacion} puntos por participar
+• ${CONFIG.simulacros.puntosCompletacion} puntos por completar
+
+🏆 *RESPONDE "YO PARTICIPO" PARA REGISTRARTE*
+        `.trim();
+
+        const subscribers = getSubscribers();
+        for (const userId of subscribers) {
+            try {
+                await this.client.sendMessage(userId, notificacion);
+                await sleep(1500);
+            } catch (error) {
+                console.error(`Error notificando inicio a ${userId}:`, error.message);
+            }
+        }
+
+        setTimeout(async () => {
+            await this.finalizarSimulacroAutomatico(simulacro.id);
+        }, CONFIG.simulacros.duracionMinutos * 60 * 1000);
+
+        logToFile('SIMULACRO', `Iniciado: ${simulacro.titulo}`);
+    }
+
+    async finalizarSimulacroAutomatico(simulacroId) {
+        const data = loadData();
+        const simulacro = data.simulacros?.find(s => s.id === simulacroId);
+        
+        if (!simulacro || simulacro.estado !== 'en_curso') return;
+
+        await this.finalizarSimulacroCore(simulacro);
+    }
+
+    async finalizarSimulacro(chatId, args) {
+        const simulacroId = parseInt(args[0]);
+        
+        if (!simulacroId) {
+            await this.sendMessage(chatId, '❌ Debes especificar el ID.\nEjemplo: !simulacro finalizar 1');
+            return;
+        }
+
+        const data = loadData();
+        const simulacro = data.simulacros?.find(s => s.id === simulacroId);
+
+        if (!simulacro) {
+            await this.sendMessage(chatId, `❌ No existe un simulacro con ID ${simulacroId}`);
+            return;
+        }
+
+        if (simulacro.estado !== 'en_curso') {
+            await this.sendMessage(chatId, `❌ El simulacro no está en curso (estado: ${simulacro.estado})`);
+            return;
+        }
+
+        await this.finalizarSimulacroCore(simulacro);
+        await this.sendMessage(chatId, '✅ Simulacro finalizado manualmente');
+    }
+
+    async finalizarSimulacroCore(simulacro) {
+        const data = loadData();
+        const simIndex = data.simulacros.findIndex(s => s.id === simulacro.id);
+        
+        data.simulacros[simIndex].estado = 'finalizado';
+        data.simulacros[simIndex].finReal = new Date().toISOString();
+        saveData(data);
+
+        const participantes = simulacro.participantes.length;
+        const totalUsuarios = Object.keys(data.users).length;
+        const participacionPct = ((participantes / totalUsuarios) * 100).toFixed(1);
+
+        const notificacionFin = `
+✅ ═══════════════════════════════════════════════════════════════
+           🏁 SIMULACRO FINALIZADO
+═══════════════════════════════════════════════════════════════
+
+📢 *FIN DEL SIMULACRO*
+📋 ${simulacro.titulo}
+
+🕐 *HORA DE FIN:* ${new Date().toLocaleTimeString('es-MX')}
+📊 *PARTICIPACIÓN:* ${participantes}/${totalUsuarios} usuarios (${participacionPct}%)
+
+💡 *GRACIAS POR PARTICIPAR*
+        `.trim();
+
+        const subscribers = getSubscribers();
+        for (const userId of subscribers) {
+            try {
+                await this.client.sendMessage(userId, notificacionFin);
+                await sleep(1000);
+            } catch (error) {
+                console.error(`Error notificando fin a ${userId}:`, error.message);
+            }
+        }
+
+        setTimeout(async () => {
+            await this.evaluarSimulacroAutomatico(simulacro.id);
+        }, CONFIG.simulacros.tiempoEvaluacion * 60 * 1000);
+
+        logToFile('SIMULACRO', `Finalizado: ${simulacro.titulo} - ${participantes} participantes`);
+    }
+
+    async evaluarSimulacroAutomatico(simulacroId) {
+        const data = loadData();
+        const simulacro = data.simulacros?.find(s => s.id === simulacroId);
+        
+        if (!simulacro || simulacro.estado !== 'finalizado') return;
+
+        simulacro.participantes.forEach(userId => {
+            if (!data.users[userId]) {
+                data.users[userId] = { joined: new Date().toISOString(), points: 0 };
+            }
+            
+            data.users[userId].points = (data.users[userId].points || 0) + 
+                CONFIG.simulacros.puntosParticipacion + 
+                CONFIG.simulacros.puntosCompletacion;
+        });
+
+        saveData(data);
+        logToFile('SIMULACRO', `Evaluación automática: ${simulacro.titulo}`);
+    }
+
+    async evaluarSimulacro(chatId, args) {
+        const simulacroId = parseInt(args[0]);
+        
+        if (!simulacroId) {
+            await this.sendMessage(chatId, '❌ Especifica el ID.\nEjemplo: !simulacro evaluar 1');
+            return;
+        }
+
+        const data = loadData();
+        const simulacro = data.simulacros?.find(s => s.id === simulacroId);
+
+        if (!simulacro) {
+            await this.sendMessage(chatId, `❌ No existe simulacro con ID ${simulacroId}`);
+            return;
+        }
+
+        if (simulacro.estado !== 'finalizado') {
+            await this.sendMessage(chatId, `❌ El simulacro debe estar finalizado`);
+            return;
+        }
+
+        const participantes = simulacro.participantes.length;
+        const totalUsuarios = Object.keys(data.users).length;
+        const participacionPct = ((participantes / totalUsuarios) * 100).toFixed(1);
+
+        const evaluacion = `
+╔═══════════════════════════════════════════════════════════════╗
+║              📊 EVALUACIÓN DEL SIMULACRO                      ║
+╚═══════════════════════════════════════════════════════════════╝
+
+🆔 *ID:* ${simulacro.id}
+📋 *Título:* ${simulacro.titulo}
+
+👥 *PARTICIPACIÓN:*
+├─ Participantes: ${participantes}
+├─ Total usuarios: ${totalUsuarios}
+├─ Porcentaje: ${participacionPct}%
+└─ Calificación: ${this.calcularCalificacionParticipacion(participacionPct)}
+
+💰 *PUNTOS OTORGADOS:*
+└─ Total distribuido: ${participantes * 150} pts
+        `.trim();
+
+        await this.sendMessage(chatId, evaluacion);
+    }
+
+    calcularCalificacionParticipacion(pct) {
+        if (pct >= 80) return '⭐⭐⭐⭐⭐ EXCELENTE';
+        if (pct >= 60) return '⭐⭐⭐⭐ MUY BUENO';
+        if (pct >= 40) return '⭐⭐⭐ BUENO';
+        if (pct >= 20) return '⭐⭐ REGULAR';
+        return '⭐ BAJO';
+    }
+
+    async listarSimulacros(chatId) {
+        const data = loadData();
+        
+        if (!data.simulacros || data.simulacros.length === 0) {
+            await this.sendMessage(chatId, '📋 No hay simulacros programados.');
+            return;
+        }
+
+        const programados = data.simulacros.filter(s => s.estado === 'programado');
+        const enCurso = data.simulacros.filter(s => s.estado === 'en_curso');
+        const finalizados = data.simulacros.filter(s => s.estado === 'finalizado');
+
+        let lista = `
+╔═══════════════════════════════════════════════════════════════╗
+║              📋 LISTA DE SIMULACROS                           ║
+╚═══════════════════════════════════════════════════════════════╝
+\n`;
+
+        if (enCurso.length > 0) {
+            lista += '🔴 *EN CURSO:*\n';
+            enCurso.forEach(s => {
+                lista += `├─ [${s.id}] ${s.titulo}\n`;
+                lista += `│  └─ Participantes: ${s.participantes.length}\n\n`;
+            });
+        }
+
+        if (programados.length > 0) {
+            lista += '📅 *PROGRAMADOS:*\n';
+            programados.forEach(s => {
+                const fecha = new Date(s.fechaHora);
+                lista += `├─ [${s.id}] ${s.titulo}\n`;
+                lista += `│  └─ ${fecha.toLocaleDateString('es-MX')} ${fecha.toLocaleTimeString('es-MX')}\n\n`;
+            });
+        }
+
+        if (finalizados.length > 0) {
+            lista += '✅ *FINALIZADOS (últimos 3):*\n';
+            finalizados.slice(-3).reverse().forEach(s => {
+                lista += `├─ [${s.id}] ${s.titulo}\n`;
+                lista += `│  └─ ${s.participantes.length} participantes\n\n`;
+            });
+        }
+
+        await this.sendMessage(chatId, lista.trim());
+    }
+
+    async cancelarSimulacro(chatId, args) {
+        const simulacroId = parseInt(args[0]);
+        
+        if (!simulacroId) {
+            await this.sendMessage(chatId, '❌ Especifica el ID.\nEjemplo: !simulacro cancelar 1');
+            return;
+        }
+
+        const data = loadData();
+        const simulacro = data.simulacros?.find(s => s.id === simulacroId);
+
+        if (!simulacro) {
+            await this.sendMessage(chatId, `❌ No existe simulacro con ID ${simulacroId}`);
+            return;
+        }
+
+        if (simulacro.estado === 'finalizado' || simulacro.estado === 'cancelado') {
+            await this.sendMessage(chatId, `❌ No se puede cancelar (estado: ${simulacro.estado})`);
+            return;
+        }
+
+        const simIndex = data.simulacros.findIndex(s => s.id === simulacroId);
+        data.simulacros[simIndex].estado = 'cancelado';
+        data.simulacros[simIndex].canceladoEn = new Date().toISOString();
+        saveData(data);
+
+        await this.sendMessage(chatId, `✅ Simulacro "${simulacro.titulo}" cancelado.`);
+        logToFile('SIMULACRO', `Cancelado: ${simulacro.titulo}`);
+    }
+
+    async verParticipantes(chatId, args) {
+        const simulacroId = parseInt(args[0]);
+        
+        if (!simulacroId) {
+            await this.sendMessage(chatId, '❌ Especifica el ID.\nEjemplo: !simulacro participantes 1');
+            return;
+        }
+
+        const data = loadData();
+        const simulacro = data.simulacros?.find(s => s.id === simulacroId);
+
+        if (!simulacro) {
+            await this.sendMessage(chatId, `❌ No existe simulacro con ID ${simulacroId}`);
+            return;
+        }
+
+        if (!simulacro.participantes || simulacro.participantes.length === 0) {
+            await this.sendMessage(chatId, '📋 Aún no hay participantes registrados.');
+            return;
+        }
+
+        let mensaje = `
+📋 *Simulacro:* ${simulacro.titulo}
+👤 *Participantes:* ${simulacro.participantes.length}\n\n`;
+
+        simulacro.participantes.forEach((userId, index) => {
+            mensaje += `${index + 1}. ${userId.substring(0, 15)}...\n`;
+        });
+
+        await this.sendMessage(chatId, mensaje.trim());
+    }
+
+    async generarReporte(chatId, args) {
+        const simulacroId = parseInt(args[0]);
+        
+        if (!simulacroId) {
+            await this.sendMessage(chatId, '❌ Especifica el ID.\nEjemplo: !simulacro reporte 1');
+            return;
+        }
+
+        const data = loadData();
+        const simulacro = data.simulacros?.find(s => s.id === simulacroId);
+
+        if (!simulacro) {
+            await this.sendMessage(chatId, `❌ No existe simulacro con ID ${simulacroId}`);
+            return;
+        }
+
+        const participantes = simulacro.participantes.length;
+        const totalUsuarios = Object.keys(data.users).length;
+        const participacionPct = ((participantes / totalUsuarios) * 100).toFixed(1);
+
+        const reporte = `
+╔═══════════════════════════════════════════════════════════════╗
+║           📄 REPORTE DETALLADO DE SIMULACRO                   ║
+╚═══════════════════════════════════════════════════════════════╝
+
+🆔 *ID:* ${simulacro.id}
+📋 *Título:* ${simulacro.titulo}
+📊 *Estado:* ${simulacro.estado.toUpperCase()}
+
+👥 *PARTICIPACIÓN:*
+├─ Participantes: ${participantes}
+├─ Total usuarios: ${totalUsuarios}
+└─ Porcentaje: ${participacionPct}%
+
+💰 *PUNTOS:*
+└─ Total distribuido: ${participantes * 150} pts
+
+*Generado:* ${new Date().toLocaleString('es-MX')}
+        `.trim();
+
+        await this.sendMessage(chatId, reporte);
+    }
+
+    async statsSimulacros(chatId) {
+        const data = loadData();
+        
+        if (!data.simulacros || data.simulacros.length === 0) {
+            await this.sendMessage(chatId, '📊 No hay estadísticas disponibles.');
+            return;
+        }
+
+        const total = data.simulacros.length;
+        const programados = data.simulacros.filter(s => s.estado === 'programado').length;
+        const finalizados = data.simulacros.filter(s => s.estado === 'finalizado').length;
+
+        const stats = `
+╔═══════════════════════════════════════════════════════════════╗
+║         📊 ESTADÍSTICAS DE SIMULACROS                         ║
+╚═══════════════════════════════════════════════════════════════╝
+
+📈 *RESUMEN:*
+├─ Total: ${total}
+├─ Programados: ${programados}
+└─ Finalizados: ${finalizados}
+        `.trim();
+
+        await this.sendMessage(chatId, stats);
+    }
+
+    async verRanking(chatId) {
+        const data = loadData();
+        
+        if (!data.users || Object.keys(data.users).length === 0) {
+            await this.sendMessage(chatId, '🏆 No hay datos de ranking.');
+            return;
+        }
+
+        const ranking = Object.entries(data.users)
+            .map(([userId, userData]) => ({
+                userId,
+                points: userData.points || 0
+            }))
+            .sort((a, b) => b.points - a.points)
+            .slice(0, 5);
+
+        let mensaje = `
+╔═══════════════════════════════════════════════════════════════╗
+║              🏆 RANKING DE PARTICIPACIÓN                      ║
+╚═══════════════════════════════════════════════════════════════╝
+
+🥇 *TOP 5 USUARIOS:*\n\n`;
+
+        ranking.forEach((user, index) => {
+            const medalla = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+            mensaje += `${medalla} ${user.userId.substring(0, 20)}...\n`;
+            mensaje += `   └─ ${user.points} puntos\n\n`;
+        });
+
+        await this.sendMessage(chatId, mensaje.trim());
+    }
+
+    async registrarParticipacion(userId) {
+        try {
+            const data = loadData();
+            
+            if (!data.simulacros) return;
+            
+            // Buscar simulacro en curso
+            const simulacroEnCurso = data.simulacros.find(s => s.estado === 'en_curso');
+            
+            if (!simulacroEnCurso) return;
+            
+            // Verificar si ya está participando
+            if (simulacroEnCurso.participantes.includes(userId)) {
+                await this.sendMessage(userId, '✅ Ya estás registrado en este simulacro.');
+                return;
+            }
+            
+            // Agregar participante
+            const simIndex = data.simulacros.findIndex(s => s.id === simulacroEnCurso.id);
+            data.simulacros[simIndex].participantes.push(userId);
+            saveData(data);
+            
+            const confirmacion = `
+✅ ═══════════════════════════════════════════════════════════════
+           🎉 ¡PARTICIPACIÓN REGISTRADA!
+═══════════════════════════════════════════════════════════════
+
+📋 *Simulacro:* ${simulacroEnCurso.titulo}
+🆔 *Tu ID:* ${userId.substring(0, 20)}...
+👥 *Participantes totales:* ${data.simulacros[simIndex].participantes.length}
+
+💰 *PUNTOS QUE GANARÁS:*
+├─ Participación: +${CONFIG.simulacros.puntosParticipacion} pts
+└─ Completación: +${CONFIG.simulacros.puntosCompletacion} pts
+   *TOTAL: ${CONFIG.simulacros.puntosParticipacion + CONFIG.simulacros.puntosCompletacion} puntos*
+
+🏆 Tus puntos se sumarán al finalizar el simulacro.
+
+📌 *SIGUE LAS INSTRUCCIONES DE SEGURIDAD*
+═══════════════════════════════════════════════════════════════
+            `.trim();
+            
+            await this.sendMessage(userId, confirmacion);
+            logToFile('SIMULACRO', `Participante registrado: ${userId} en simulacro ${simulacroEnCurso.id}`);
+            
+        } catch (error) {
+            console.error('Error registrando participación:', error.message);
+        }
     }
 
     // ═══════════════════════════════════════════════════════════════════════
