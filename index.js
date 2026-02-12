@@ -768,7 +768,8 @@ class SasmexWhatsAppBot {
                 clientId: 'bot-sasmex'
             }),
             puppeteer: puppeteerConfig,
-            restartOnAuthFail: true
+            restartOnAuthFail: true,
+            qrMaxWaitTime: 60000  // QR timeout en 60s para Heroku (menos memoria)
         });
         
         this.subscribers = [];
@@ -1022,6 +1023,15 @@ class SasmexWhatsAppBot {
             this.isReady = true;
             this.subscribers = getSubscribers();
             console.log(`👥 Suscriptores cargados: ${this.subscribers.length}`);
+            
+            // Liberar memoria en Heroku después de conectar
+            if (IS_HEROKU) {
+                try {
+                    if (global.gc) global.gc();
+                    console.log('🧹 Memoria liberada');
+                } catch (e) {}
+            }
+            
             this.startMonitoring();
         });
         
