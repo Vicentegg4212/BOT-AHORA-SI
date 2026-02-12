@@ -2,7 +2,7 @@
  * ═══════════════════════════════════════════════════════════════════════════
  *                        BOT DE ALERTAS SASMEX
  *                         VERSIÓN WHATSAPP
- *                  ✅ CÓDIGO CORREGIDO v1.0 + HEROKU
+ *                  ✅ CÓDIGO CORREGIDO v1.0 + HEROKU FULL
  * ═══════════════════════════════════════════════════════════════════════════
  */
 
@@ -12,8 +12,9 @@ const PORT = process.env.PORT || 3000;
 
 // Configurar variables de entorno para Heroku
 if (IS_HEROKU) {
-    process.env.PUPPETEER_SKIP_DOWNLOAD = 'true';
-    // No especificar ruta - dejar que Puppeteer la encuentre automáticamente
+    // Puppeteer descargará Chromium automáticamente en Heroku
+    // No necesita configuración adicional
+    console.log('🟢 Modo HEROKU detectado');
 }
 
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');

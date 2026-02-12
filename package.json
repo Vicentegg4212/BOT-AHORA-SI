@@ -10,8 +10,8 @@
   "scripts": {
     "start": "node index.js",
     "dev": "node index.js",
-    "postinstall": "npm run postinstall-heroku",
-    "postinstall-heroku": "node heroku-setup.js || true"
+    "postinstall": "npm run build-puppeteer",
+    "build-puppeteer": "node -e \"process.env.PUPPETEER_SKIP_DOWNLOAD = 'false'; require('puppeteer')\" || true"
   },
   "keywords": [
     "sasmex",
