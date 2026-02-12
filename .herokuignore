@@ -1,0 +1,5 @@
+data.json
+bot.log
+*.log
+.wwebjs_auth/
+.wwebjs_cache/
