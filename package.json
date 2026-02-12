@@ -9,9 +9,7 @@
   },
   "scripts": {
     "start": "node index.js",
-    "dev": "node index.js",
-    "postinstall": "npm run download-chromium || true",
-    "download-chromium": "node -e \"const puppeteer = require('puppeteer'); puppeteer.launch().then(b => b.close());\""
+    "dev": "node index.js"
   },
   "keywords": [
     "sasmex",
