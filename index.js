@@ -756,8 +756,10 @@ class SasmexWhatsAppBot {
             ]
         };
         
-        // En Heroku, no especificar executablePath - dejar que Puppeteer lo encuentre
-        // El Dockerfile instala chromium en /usr/bin/chromium-browser
+        // En Heroku, usar ruta de Google Chrome del buildpack
+        if (IS_HEROKU) {
+            puppeteerConfig.executablePath = process.env.GOOGLE_CHROME_BIN || '/app/.apt/usr/bin/google-chrome';
+        }
         
         this.client = new Client({
             authStrategy: new LocalAuth({
