@@ -68,6 +68,16 @@ const CONFIG = {
     fetchTimeout: 15000,
     pageTimeout: 30000,
     
+    // 🛡️ SISTEMA ANTI-CRASH
+    maxRetries: 5,
+    retryDelay: 3000,
+    circuitBreakerThreshold: 10,
+    circuitBreakerTimeout: 60000,
+    healthCheckInterval: 15000,
+    autoRestartOnCrash: true,
+    maxConsecutiveErrors: 20,
+    errorResetTime: 300000, // 5 minutos
+    
     // Puppeteer para imágenes
     puppeteerOptions: {
         headless: 'new',
@@ -89,6 +99,112 @@ const CONFIG = {
     // Prefijo de comandos
     prefix: '!'
 };
+
+// ═══════════════════════════════════════════════════════════════════════════
+//                    🛡️ SISTEMA ANTI-CRASH ULTRA ROBUSTO
+// ═══════════════════════════════════════════════════════════════════════════
+
+class CircuitBreaker {
+    constructor(threshold = 10, timeout = 60000) {
+        this.failureCount = 0;
+        this.threshold = threshold;
+        this.timeout = timeout;
+        this.state = 'CLOSED'; // CLOSED, OPEN, HALF_OPEN
+        this.nextAttempt = Date.now();
+    }
+
+    async execute(fn, fallback = null) {
+        if (this.state === 'OPEN') {
+            if (Date.now() < this.nextAttempt) {
+                console.log('⚠️ Circuit Breaker ABIERTO - usando fallback');
+                return fallback ? fallback() : null;
+            }
+            this.state = 'HALF_OPEN';
+        }
+
+        try {
+            const result = await fn();
+            this.onSuccess();
+            return result;
+        } catch (error) {
+            this.onFailure();
+            if (fallback) return fallback();
+            throw error;
+        }
+    }
+
+    onSuccess() {
+        this.failureCount = 0;
+        this.state = 'CLOSED';
+    }
+
+    onFailure() {
+        this.failureCount++;
+        if (this.failureCount >= this.threshold) {
+            this.state = 'OPEN';
+            this.nextAttempt = Date.now() + this.timeout;
+            console.log(`🔴 Circuit Breaker ABIERTO por ${this.timeout}ms`);
+        }
+    }
+
+    reset() {
+        this.failureCount = 0;
+        this.state = 'CLOSED';
+        this.nextAttempt = Date.now();
+    }
+}
+
+const circuitBreakers = {
+    sasmex: new CircuitBreaker(CONFIG.circuitBreakerThreshold, CONFIG.circuitBreakerTimeout),
+    whatsapp: new CircuitBreaker(CONFIG.circuitBreakerThreshold, CONFIG.circuitBreakerTimeout),
+    browser: new CircuitBreaker(CONFIG.circuitBreakerThreshold, CONFIG.circuitBreakerTimeout)
+};
+
+async function retryOperation(fn, maxRetries = CONFIG.maxRetries, delay = CONFIG.retryDelay, operationName = 'Operación') {
+    let lastError;
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+        try {
+            const result = await fn();
+            if (attempt > 1) {
+                console.log(`✅ ${operationName} exitosa en intento ${attempt}/${maxRetries}`);
+            }
+            return result;
+        } catch (error) {
+            lastError = error;
+            console.error(`⚠️ ${operationName} falló (${attempt}/${maxRetries}): ${error.message}`);
+            
+            if (attempt < maxRetries) {
+                const waitTime = delay * attempt; // Exponential backoff
+                console.log(`⏳ Reintentando en ${waitTime}ms...`);
+                await sleep(waitTime);
+            }
+        }
+    }
+    
+    console.error(`❌ ${operationName} falló después de ${maxRetries} intentos`);
+    throw lastError;
+}
+
+function safeExecute(fn, fallbackValue = null, errorMessage = 'Error en operación') {
+    try {
+        return fn();
+    } catch (error) {
+        console.error(`${errorMessage}: ${error.message}`);
+        logToFile('ERROR', `${errorMessage}: ${error.message}\n${error.stack}`);
+        return fallbackValue;
+    }
+}
+
+async function safeExecuteAsync(fn, fallbackValue = null, errorMessage = 'Error en operación asíncrona') {
+    try {
+        return await fn();
+    } catch (error) {
+        console.error(`${errorMessage}: ${error.message}`);
+        logToFile('ERROR', `${errorMessage}: ${error.message}\n${error.stack}`);
+        return fallbackValue;
+    }
+}
 
 // ═══════════════════════════════════════════════════════════════════════════
 //                           BASE DE DATOS LOCAL
@@ -371,24 +487,29 @@ function sleep(ms) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 async function getWebContent() {
-    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
-    const timeoutId = setTimeout(() => {
-        if (controller) controller.abort();
-    }, CONFIG.fetchTimeout);
-    
-    try {
-        console.log('📡 Obteniendo RSS SASMEX...');
-        
-        const fetchOptions = {
-            headers: {
-                'User-Agent': 'SASMEX-WhatsApp-Bot/1.0',
-                'Accept': 'application/xml, text/xml, */*'
-            }
-        };
-        
-        if (controller) fetchOptions.signal = controller.signal;
-        
-        const response = await fetch(CONFIG.apiUrl, fetchOptions);
+    return await circuitBreakers.sasmex.execute(
+        async () => {
+            return await retryOperation(
+                async () => {
+                    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+                    const timeoutId = setTimeout(() => {
+                        if (controller) controller.abort();
+                    }, CONFIG.fetchTimeout);
+                    
+                    try {
+                        console.log('📡 Obteniendo RSS SASMEX...');
+                        
+                        const fetchOptions = {
+                            headers: {
+                                'User-Agent': 'SASMEX-WhatsApp-Bot/2.0-Ultra-Robust',
+                                'Accept': 'application/xml, text/xml, */*',
+                                'Cache-Control': 'no-cache'
+                            }
+                        };
+                        
+                        if (controller) fetchOptions.signal = controller.signal;
+                        
+                        const response = await fetch(CONFIG.apiUrl, fetchOptions);
         
         clearTimeout(timeoutId);
         
@@ -780,12 +901,19 @@ class SasmexWhatsAppBot {
         this.checkIntervalId = null;
         this.isReady = false;
         
-        // Sistema de auto-reparación
+        // 🛡️ Sistema de auto-reparación ULTRA ROBUSTO
         this.autoRepairEnabled = true;
         this.errorCount = 0;
+        this.consecutiveErrors = 0;
         this.lastErrorTime = null;
         this.maxErrorsBeforeRepair = 5;
         this.repairIntervalId = null;
+        this.healthCheckIntervalId = null;
+        this.lastSuccessfulOperation = new Date();
+        this.criticalErrorCount = 0;
+        this.isRecovering = false;
+        this.recoveryAttempts = 0;
+        this.maxRecoveryAttempts = 10;
         
         this.setupEvents();
         this.setupAutoRepair();
