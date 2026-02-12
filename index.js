@@ -758,8 +758,9 @@ class SasmexWhatsAppBot {
         
         // En Heroku, usar Chrome del buildpack heroku-buildpack-chrome-for-testing
         if (IS_HEROKU) {
-            // El buildpack instala Chrome en esta ruta:
-            puppeteerConfig.executablePath = '/app/.chrome-for-testing/chrome-linux64/chrome';
+            // El buildpack instala Chrome automáticamente
+            // Puppeteer lo encontrará en: /app/.chrome-for-testing/chrome-linux64/chrome
+            // NO especificamos path, Puppeteer lo detecta automáticamente
         }
         
         this.client = new Client({
