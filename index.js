@@ -13,7 +13,7 @@ const PORT = process.env.PORT || 3000;
 // Configurar variables de entorno para Heroku
 if (IS_HEROKU) {
     process.env.PUPPETEER_SKIP_DOWNLOAD = 'true';
-    process.env.PUPPETEER_EXECUTABLE_PATH = '/usr/bin/chromium-browser';
+    // No especificar ruta - dejar que Puppeteer la encuentre automáticamente
 }
 
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
@@ -755,10 +755,8 @@ class SasmexWhatsAppBot {
             ]
         };
         
-        // En Heroku, usar Chromium del sistema
-        if (IS_HEROKU && process.env.PUPPETEER_EXECUTABLE_PATH) {
-            puppeteerConfig.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
-        }
+        // En Heroku, no especificar executablePath - dejar que Puppeteer lo encuentre
+        // El Dockerfile instala chromium en /usr/bin/chromium-browser
         
         this.client = new Client({
             authStrategy: new LocalAuth({

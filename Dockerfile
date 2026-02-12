@@ -1,10 +1,12 @@
 FROM node:18-alpine
 
-# Instalar dependencias de Puppeteer
+# Instalar dependencias de Puppeteer para Alpine
 RUN apk add --no-cache \
     chromium \
     noto-sans \
-    ca-certificates
+    ca-certificates \
+    font-dejavu \
+    ttf-liberation
 
 # Crear directorio de trabajo
 WORKDIR /app
