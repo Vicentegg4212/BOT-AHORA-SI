@@ -611,17 +611,33 @@ async function getWebContent() {
             }
         };
         
-    } catch (error) {
-        clearTimeout(timeoutId);
-        
-        if (error && (error.name === 'AbortError' || error.message.includes('abort'))) {
-            console.error('❌ Timeout obteniendo RSS');
-            return { success: false, error: 'Timeout de conexión' };
+                    } catch (error) {
+                        clearTimeout(timeoutId);
+                        
+                        if (error && (error.name === 'AbortError' || error.message.includes('abort'))) {
+                            throw new Error('Timeout obteniendo RSS');
+                        }
+                        
+                        throw error;
+                    }
+                },
+                3, // 3 reintentos
+                2000, // 2 segundos entre reintentos
+                'Obtener RSS SASMEX'
+            );
+        },
+        () => {
+            console.log('⚠️ Usando datos en caché por falla de Circuit Breaker');
+            const lastContent = getLastContent();
+            if (lastContent) {
+                return { success: true, cached: true, data: JSON.parse(lastContent) };
+            }
+            return { success: false, error: 'Circuit Breaker abierto y sin caché' };
         }
-        
-        console.error('❌ Error obteniendo RSS:', error.message);
+    ).catch(error => {
+        console.error('❌ Error obteniendo RSS (después de reintentos):', error.message);
         return { success: false, error: error?.message || String(error) };
-    }
+    });
 }
 
 function formatDate(isoString) {
@@ -1371,6 +1387,11 @@ class SasmexWhatsAppBot {
                 case 'admin-system':
                     await this.cmdOwnerSystem(msg);
                     break;
+                
+                case 'comunicado':
+                case 'comunicados':
+                    await this.cmdComunicado(msg, args);
+                    break;
                     
                 default:
                     await this.sendMessage(chatId, 
@@ -1580,6 +1601,7 @@ Puedes cambiar tu nivel con: ${CONFIG.prefix}severidad [nivel]
 │  ${CONFIG.prefix}stats               ├─ 📈 Estadísticas del bot              │
 │  ${CONFIG.prefix}logs [n]            ├─ 📝 Ver últimos logs                  │
 │  ${CONFIG.prefix}broadcast [msg]     ├─ 📢 Enviar a todos                    │
+│  ${CONFIG.prefix}comunicado          ├─ 📢 Sistema de comunicados            │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ${isOwner ? `
@@ -2456,7 +2478,421 @@ ${CONFIG.apiUrl}
             await this.sendMessage(chatId, `❌ Error en broadcast: ${error.message}`);
             logToFile('ERROR', `Broadcast error: ${error.message}`);
         }
-        await this.sendMessage(chatId, `✅ Broadcast completado:\n• Enviados: ${sent}\n• Fallidos: ${failed}`);
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════
+    //              📢 SISTEMA DE GENERACIÓN DE COMUNICADOS
+    // ═══════════════════════════════════════════════════════════════════════
+
+    async cmdComunicado(msg, args) {
+        const chatId = msg.from;
+        
+        if (!isAdmin(chatId)) {
+            await this.sendMessage(chatId, '❌ Solo administradores pueden generar comunicados');
+            return;
+        }
+
+        const subcommand = args[0]?.toLowerCase();
+
+        if (!subcommand || subcommand === 'menu') {
+            const menu = `
+📢 *SISTEMA DE COMUNICADOS*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🎯 *COMANDOS DISPONIBLES:*
+
+${CONFIG.prefix}comunicado plantillas
+   └─ Ver plantillas disponibles
+
+${CONFIG.prefix}comunicado crear <tipo>
+   └─ Crear comunicado desde plantilla
+   └─ Tipos: alerta, mantenimiento, aviso, emergencia
+
+${CONFIG.prefix}comunicado custom <mensaje>
+   └─ Crear comunicado personalizado
+
+${CONFIG.prefix}comunicado preview <tipo>
+   └─ Vista previa de plantilla
+
+${CONFIG.prefix}comunicado enviar <mensaje>
+   └─ Enviar comunicado a todos
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💡 *EJEMPLO:*
+${CONFIG.prefix}comunicado crear alerta
+${CONFIG.prefix}comunicado custom Atención: Simulacro mañana
+            `;
+            await this.sendMessage(chatId, menu);
+            return;
+        }
+
+        switch (subcommand) {
+            case 'plantillas':
+                await this.showTemplates(chatId);
+                break;
+            case 'crear':
+                await this.createComunicado(chatId, args.slice(1));
+                break;
+            case 'custom':
+                await this.customComunicado(chatId, args.slice(1));
+                break;
+            case 'preview':
+                await this.previewComunicado(chatId, args.slice(1));
+                break;
+            case 'enviar':
+                await this.sendComunicado(chatId, args.slice(1));
+                break;
+            default:
+                await this.sendMessage(chatId, '❌ Comando no reconocido. Usa: !comunicado menu');
+        }
+    }
+
+    async showTemplates(chatId) {
+        const templates = `
+📋 *PLANTILLAS DE COMUNICADOS DISPONIBLES*
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚨 *ALERTA*
+Comunicado de alerta sísmica oficial
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🔧 *MANTENIMIENTO*
+Aviso de mantenimiento programado
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📢 *AVISO*
+Comunicado general informativo
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🆘 *EMERGENCIA*
+Alerta de emergencia crítica
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📝 *SIMULACRO*
+Aviso de simulacro de sismo
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+ℹ️ *INFORMATIVO*
+Información general del sistema
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💡 *USO:*
+${CONFIG.prefix}comunicado crear <tipo>
+${CONFIG.prefix}comunicado preview <tipo>
+        `;
+        await this.sendMessage(chatId, templates);
+    }
+
+    async previewComunicado(chatId, args) {
+        const tipo = args[0]?.toLowerCase();
+        
+        if (!tipo) {
+            await this.sendMessage(chatId, '❌ Especifica el tipo: !comunicado preview <tipo>');
+            return;
+        }
+
+        const comunicado = this.generateComunicadoTemplate(tipo);
+        
+        if (!comunicado) {
+            await this.sendMessage(chatId, '❌ Tipo no válido. Usa: !comunicado plantillas');
+            return;
+        }
+
+        await this.sendMessage(chatId, `📄 *VISTA PREVIA:*\n\n${comunicado}`);
+    }
+
+    async createComunicado(chatId, args) {
+        const tipo = args[0]?.toLowerCase();
+        
+        if (!tipo) {
+            await this.sendMessage(chatId, '❌ Especifica el tipo: !comunicado crear <tipo>');
+            return;
+        }
+
+        const comunicado = this.generateComunicadoTemplate(tipo, args.slice(1));
+        
+        if (!comunicado) {
+            await this.sendMessage(chatId, '❌ Tipo no válido. Usa: !comunicado plantillas');
+            return;
+        }
+
+        await this.sendMessage(chatId, `✅ *COMUNICADO GENERADO:*\n\n${comunicado}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n💡 Para enviar: ${CONFIG.prefix}comunicado enviar <mensaje>`);
+    }
+
+    async customComunicado(chatId, args) {
+        const mensaje = args.join(' ');
+        
+        if (!mensaje) {
+            await this.sendMessage(chatId, '❌ Proporciona el mensaje: !comunicado custom <mensaje>');
+            return;
+        }
+
+        const fecha = new Date().toLocaleString('es-MX', {
+            timeZone: 'America/Mexico_City',
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+
+        const comunicado = `
+╔════════════════════════════════════════════════════════════════╗
+║                 📢 COMUNICADO OFICIAL SASMEX                   ║
+╚════════════════════════════════════════════════════════════════╝
+
+${mensaje}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 *Fecha:* ${fecha}
+🏛️ *Emisor:* Sistema SASMEX WhatsApp Bot
+📞 *Emergencias:* 911
+
+╔════════════════════════════════════════════════════════════════╗
+║        Para más información: https://rss.sasmex.net            ║
+╚════════════════════════════════════════════════════════════════╝
+        `.trim();
+
+        await this.sendMessage(chatId, `✅ *COMUNICADO PERSONALIZADO:*\n\n${comunicado}\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n💡 Para enviar: ${CONFIG.prefix}comunicado enviar ${mensaje}`);
+    }
+
+    async sendComunicado(chatId, args) {
+        const mensaje = args.join(' ');
+        
+        if (!mensaje) {
+            await this.sendMessage(chatId, '❌ Proporciona el mensaje: !comunicado enviar <mensaje>');
+            return;
+        }
+
+        try {
+            await this.sendMessage(chatId, '📢 Generando y enviando comunicado...');
+            
+            const fecha = new Date().toLocaleString('es-MX', {
+                timeZone: 'America/Mexico_City',
+                day: 'numeric',
+                month: 'long',
+                year: 'numeric',
+                hour: '2-digit',
+                minute: '2-digit'
+            });
+
+            const comunicado = `
+╔════════════════════════════════════════════════════════════════╗
+║                 📢 COMUNICADO OFICIAL SASMEX                   ║
+╚════════════════════════════════════════════════════════════════╝
+
+${mensaje}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 *Fecha:* ${fecha}
+🏛️ *Emisor:* Sistema SASMEX WhatsApp Bot
+📞 *Emergencias:* 911
+
+╔════════════════════════════════════════════════════════════════╗
+║        Para más información: https://rss.sasmex.net            ║
+╚════════════════════════════════════════════════════════════════╝
+            `.trim();
+
+            const subscribers = getSubscribers();
+            let sent = 0;
+            let failed = 0;
+            
+            for (const subscriberId of subscribers) {
+                try {
+                    await this.client.sendMessage(subscriberId, comunicado);
+                    sent++;
+                    await sleep(1500); // Pausa para evitar spam
+                } catch (error) {
+                    console.error(`Error enviando comunicado a ${subscriberId}:`, error.message);
+                    failed++;
+                }
+                
+                if ((sent + failed) % 5 === 0) {
+                    await this.sendMessage(chatId, `📊 Enviando: ${sent}/${subscribers.length}`);
+                }
+            }
+
+            await this.sendMessage(chatId, `✅ *COMUNICADO ENVIADO*\n\n📊 *Estadísticas:*\n• Enviados: ${sent}\n• Fallidos: ${failed}\n• Total: ${subscribers.length}`);
+            logToFile('COMUNICADO', `Enviado a ${sent} usuarios: ${mensaje.substring(0, 50)}...`);
+        } catch (error) {
+            console.error('Error enviando comunicado:', error.message);
+            await this.sendMessage(chatId, `❌ Error: ${error.message}`);
+        }
+    }
+
+    generateComunicadoTemplate(tipo, extraArgs = []) {
+        const fecha = new Date().toLocaleString('es-MX', {
+            timeZone: 'America/Mexico_City',
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit'
+        });
+
+        const templates = {
+            alerta: `
+╔════════════════════════════════════════════════════════════════╗
+║           🚨 ALERTA SÍSMICA OFICIAL - SASMEX 🚨                ║
+╚════════════════════════════════════════════════════════════════╝
+
+⚠️ *ATENCIÓN CIUDADANÍA*
+
+Se ha detectado actividad sísmica en la región. 
+
+🎯 *ACCIONES INMEDIATAS:*
+  ✓ Mantenga la calma
+  ✓ Ubíquese en zona segura
+  ✓ Aléjese de ventanas y objetos que puedan caer
+  ✓ Si está en edificio, NO use elevadores
+  ✓ Siga instrucciones de autoridades
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 *Fecha:* ${fecha}
+🏛️ *Emisor:* Sistema de Alerta Sísmica Mexicano (SASMEX)
+📞 *Emergencias:* 911
+🌐 *Web:* https://rss.sasmex.net
+
+╔════════════════════════════════════════════════════════════════╗
+║    Manténgase informado. Siga las indicaciones oficiales.     ║
+╚════════════════════════════════════════════════════════════════╝
+`,
+            mantenimiento: `
+╔════════════════════════════════════════════════════════════════╗
+║              🔧 AVISO DE MANTENIMIENTO - SASMEX                ║
+╚════════════════════════════════════════════════════════════════╝
+
+ℹ️ *MANTENIMIENTO PROGRAMADO*
+
+Se informa a la ciudadanía que el Sistema de Alerta Sísmica 
+realizará mantenimiento preventivo.
+
+📋 *DETALLES:*
+  • Fecha: ${extraArgs[0] || 'Por confirmar'}
+  • Duración estimada: ${extraArgs[1] || '2-4 horas'}
+  • Servicios afectados: Alertas temporalmente suspendidas
+
+⚠️ Durante este periodo, las alertas sísmicas podrían presentar
+retrasos. Se recomienda mantenerse atento a fuentes oficiales.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 *Fecha de emisión:* ${fecha}
+🏛️ *Emisor:* SASMEX - Centro de Operaciones
+🌐 *Información:* https://rss.sasmex.net
+
+╔════════════════════════════════════════════════════════════════╗
+║           Agradecemos su comprensión y paciencia.              ║
+╚════════════════════════════════════════════════════════════════╝
+`,
+            aviso: `
+╔════════════════════════════════════════════════════════════════╗
+║                   📢 AVISO OFICIAL - SASMEX                    ║
+╚════════════════════════════════════════════════════════════════╝
+
+ℹ️ *COMUNICADO INFORMATIVO*
+
+${extraArgs.join(' ') || 'Información importante del Sistema de Alerta Sísmica Mexicano.'}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 *Fecha:* ${fecha}
+🏛️ *Emisor:* SASMEX
+📞 *Contacto:* 911 (Emergencias)
+🌐 *Web:* https://rss.sasmex.net
+
+╔════════════════════════════════════════════════════════════════╗
+║              Manténgase informado. SASMEX 24/7.                ║
+╚════════════════════════════════════════════════════════════════╝
+`,
+            emergencia: `
+╔════════════════════════════════════════════════════════════════╗
+║          🆘 ALERTA DE EMERGENCIA - ACCIÓN INMEDIATA 🆘         ║
+╚════════════════════════════════════════════════════════════════╝
+
+🚨🚨🚨 *EMERGENCIA SÍSMICA DETECTADA* 🚨🚨🚨
+
+⚠️ *ACCIÓN INMEDIATA REQUERIDA*
+
+SISMO DE GRAN MAGNITUD DETECTADO
+
+🎯 *INSTRUCCIONES URGENTES:*
+  ✓ EVACUE INMEDIATAMENTE edificios de alto riesgo
+  ✓ DIRÍJASE a zona segura designada
+  ✓ MANTENGA LA CALMA y ayude a personas vulnerables
+  ✓ NO REGRESE al edificio sin autorización
+  ✓ SIGA instrucciones de Protección Civil
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 *Fecha:* ${fecha}
+🏛️ *Emisor:* SASMEX - ALERTA MÁXIMA
+📞 *EMERGENCIAS:* 911
+🚨 *Protección Civil:* Activa
+
+╔════════════════════════════════════════════════════════════════╗
+║               ⚠️ MANTENGA LA CALMA - ACTÚE YA ⚠️              ║
+╚════════════════════════════════════════════════════════════════╝
+`,
+            simulacro: `
+╔════════════════════════════════════════════════════════════════╗
+║              📝 AVISO DE SIMULACRO - SASMEX                    ║
+╚════════════════════════════════════════════════════════════════╝
+
+🎯 *SIMULACRO DE SISMO PROGRAMADO*
+
+Se informa a la población que se realizará un simulacro de
+evacuación por sismo.
+
+📋 *INFORMACIÓN DEL SIMULACRO:*
+  • Fecha: ${extraArgs[0] || 'Por confirmar'}
+  • Hora: ${extraArgs[1] || 'Por confirmar'}
+  • Tipo: Simulacro Nacional
+  • Participación: Obligatoria
+
+🎯 *QUÉ HACER:*
+  ✓ Al escuchar la alarma, evacue ordenadamente
+  ✓ Siga las rutas de evacuación establecidas
+  ✓ Diríjase al punto de reunión designado
+  ✓ Espere instrucciones de brigadistas
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 *Fecha de emisión:* ${fecha}
+🏛️ *Emisor:* SASMEX / Protección Civil
+🌐 *Información:* https://rss.sasmex.net
+
+╔════════════════════════════════════════════════════════════════╗
+║          El simulacro salva vidas. Participe activamente.      ║
+╚════════════════════════════════════════════════════════════════╝
+`,
+            informativo: `
+╔════════════════════════════════════════════════════════════════╗
+║              ℹ️ INFORMACIÓN OFICIAL - SASMEX                   ║
+╚════════════════════════════════════════════════════════════════╝
+
+📊 *BOLETÍN INFORMATIVO*
+
+${extraArgs.join(' ') || 'El Sistema de Alerta Sísmica Mexicano opera normalmente.\n\nTodos los sistemas funcionando correctamente.\nCobertura: 100%\nEstado: Operativo'}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📅 *Fecha:* ${fecha}
+🏛️ *Emisor:* SASMEX - Centro de Información
+📞 *Contacto:* 911
+🌐 *Web:* https://rss.sasmex.net
+
+╔════════════════════════════════════════════════════════════════╗
+║           SASMEX: Vigilando por su seguridad 24/7.             ║
+╚════════════════════════════════════════════════════════════════╝
+`
+        };
+
+        return templates[tipo] ? templates[tipo].trim() : null;
     }
 
     // ═══════════════════════════════════════════════════════════════════════
