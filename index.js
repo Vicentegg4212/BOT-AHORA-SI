@@ -756,9 +756,9 @@ class SasmexWhatsAppBot {
             ]
         };
         
-        // En Heroku, usar ruta de Google Chrome del buildpack
+        // En Heroku, usar ruta de Chrome del buildpack chrome-for-testing
         if (IS_HEROKU) {
-            puppeteerConfig.executablePath = process.env.GOOGLE_CHROME_BIN || '/app/.apt/usr/bin/google-chrome';
+            puppeteerConfig.executablePath = process.env.CHROME_BIN || process.env.GOOGLE_CHROME_BIN || '/usr/bin/chromium-browser';
         }
         
         this.client = new Client({
