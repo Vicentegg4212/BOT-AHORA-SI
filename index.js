@@ -3009,9 +3009,10 @@ ${extraArgs.join(' ') || 'El Sistema de Alerta Sísmica Mexicano opera normalmen
 
 ┌─ 📅 PROGRAMACIÓN ────────────────────────────────────────────┐
 │                                                                │
-│  !simulacro programar [fecha] [hora] [título]                 │
-│  └─ Programa un nuevo simulacro                               │
-│  └─ Ejemplo: !simulacro programar 2026-03-15 10:00 Sismo 7.5  │
+│  !simulacro programar [fecha] [hora] [magnitud] [lugar]       │
+│  └─ Programa un nuevo simulacro con todos los detalles        │
+│  └─ Ejemplo: !simulacro programar 2026-03-15 10:00 7.5 CDMX   │
+│  └─ Lugar puede tener espacios: Guerrero Costa                │
 │                                                                │
 │  !simulacro listar                                             │
 │  └─ Ver todos los simulacros programados                      │
@@ -3067,7 +3068,7 @@ ${extraArgs.join(' ') || 'El Sistema de Alerta Sísmica Mexicano opera normalmen
 
 📋 *EJEMPLO DE USO COMPLETO:*
 
-1️⃣ Programar: !simulacro programar 2026-03-20 09:00 Sismo 7.8
+1️⃣ Programar: !simulacro programar 2026-03-20 09:00 7.8 Costa de Guerrero
 2️⃣ Sistema envía recordatorios automáticos
 3️⃣ Iniciar: !simulacro iniciar 1
 4️⃣ Usuarios participan durante ${CONFIG.simulacros.duracionMinutos} minutos
@@ -3087,18 +3088,31 @@ y ${CONFIG.simulacros.puntosCompletacion} puntos adicionales por completar!
     }
 
     async programarSimulacro(chatId, args) {
-        if (args.length < 3) {
-            await this.sendMessage(chatId, 
-                '❌ Formato incorrecto.\n\n' +
-                'Uso: !simulacro programar [fecha] [hora] [título]\n' +
-                'Ejemplo: !simulacro programar 2026-03-15 10:00 Simulacro Sismo 7.5'
-            );
-            return;
-        }
+        try {
+            if (args.length < 4) {
+                await this.sendMessage(chatId, 
+                    '❌ Formato incorrecto.\n\n' +
+                    'Uso: !simulacro programar [fecha] [hora] [magnitud] [lugar]\n' +
+                    'Ejemplo: !simulacro programar 2026-03-15 10:00 7.5 Costa de Guerrero\n\n' +
+                    '📝 Campos:\n' +
+                    '• Fecha: YYYY-MM-DD\n' +
+                    '• Hora: HH:MM (24hrs)\n' +
+                    '• Magnitud: 5.0-9.0\n' +
+                    '• Lugar: Nombre del epicentro (puede tener espacios)'
+                );
+                return;
+            }
 
-        const fecha = args[0];
-        const hora = args[1];
-        const titulo = args.slice(2).join(' ');
+            const fecha = args[0];
+            const hora = args[1];
+            const magnitud = parseFloat(args[2]);
+            const lugar = args.slice(3).join(' ');
+
+            // Validar magnitud
+            if (isNaN(magnitud) || magnitud < 3.0 || magnitud > 10.0) {
+                await this.sendMessage(chatId, '❌ Magnitud inválida. Debe ser un número entre 3.0 y 10.0');
+                return;
+            }
 
         try {
             const fechaHora = new Date(`${fecha}T${hora}:00`);
@@ -3114,9 +3128,13 @@ y ${CONFIG.simulacros.puntosCompletacion} puntos adicionales por completar!
             
             const simulacroId = data.simulacros.length + 1;
             
+            const titulo = `Sismo ${magnitud} - ${lugar}`;
+            
             const nuevoSimulacro = {
                 id: simulacroId,
                 titulo,
+                magnitud,
+                lugar,
                 fechaHora: fechaHora.toISOString(),
                 estado: 'programado',
                 participantes: [],
@@ -3141,6 +3159,8 @@ y ${CONFIG.simulacros.puntosCompletacion} puntos adicionales por completar!
 
 🆔 *ID:* ${simulacroId}
 📋 *Título:* ${titulo}
+📊 *Magnitud:* ${magnitud} Richter
+📍 *Lugar:* ${lugar}
 📅 *Fecha:* ${fechaHora.toLocaleDateString('es-MX', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
 🕐 *Hora:* ${fechaHora.toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' })}
 ⏱️ *Duración:* ${CONFIG.simulacros.duracionMinutos} minutos
@@ -3163,7 +3183,16 @@ Para cancelar: !simulacro cancelar ${simulacroId}
 
         } catch (error) {
             console.error('Error programando simulacro:', error.message);
-            await this.sendMessage(chatId, `❌ Error al programar: ${error.message}`);
+            logToFile('ERROR', `programarSimulacro: ${error.message}\n${error.stack}`);
+            await safeExecuteAsync(
+                async () => await this.sendMessage(chatId, `❌ Error al programar: ${error.message}`),
+                null,
+                'Error enviando mensaje de error'
+            );
+        }
+        } catch (fatalError) {
+            console.error('💀 ERROR FATAL en programarSimulacro:', fatalError.message);
+            logToFile('FATAL', `programarSimulacro FATAL: ${fatalError.message}`);
         }
     }
 
@@ -3191,6 +3220,7 @@ Para cancelar: !simulacro cancelar ${simulacroId}
     }
 
     async enviarRecordatorio(simulacro, horasAntes) {
+        try {
         const data = loadData();
         const simActual = data.simulacros?.find(s => s.id === simulacro.id);
         
@@ -3207,6 +3237,8 @@ Para cancelar: !simulacro cancelar ${simulacroId}
 
 🏃 *SIMULACRO PROGRAMADO*
 📋 ${simActual.titulo}
+📊 *Magnitud:* ${simActual.magnitud} Richter
+📍 *Epicentro:* ${simActual.lugar}
 
 ⏰ *TIEMPO RESTANTE:* ${tiempoTexto}
 📅 Fecha: ${new Date(simActual.fechaHora).toLocaleDateString('es-MX')}
@@ -3233,6 +3265,10 @@ Para cancelar: !simulacro cancelar ${simulacroId}
         saveData(data);
 
         logToFile('SIMULACRO', `Recordatorio enviado: ${simActual.titulo} - ${tiempoTexto}`);
+        } catch (error) {
+            console.error('❌ Error enviando recordatorio:', error.message);
+            logToFile('ERROR', `enviarRecordatorio: ${error.message}`);
+        }
     }
 
     async iniciarSimulacroAutomatico(simulacroId) {
@@ -3270,6 +3306,7 @@ Para cancelar: !simulacro cancelar ${simulacroId}
     }
 
     async iniciarSimulacroCore(simulacro) {
+        try {
         const data = loadData();
         const simIndex = data.simulacros.findIndex(s => s.id === simulacro.id);
         
@@ -3284,9 +3321,13 @@ Para cancelar: !simulacro cancelar ${simulacroId}
 
 📢 *INICIO DE SIMULACRO*
 📋 ${simulacro.titulo}
+📊 *Magnitud:* ${simulacro.magnitud} Richter
+📍 *Epicentro:* ${simulacro.lugar}
 
 🕐 *HORA DE INICIO:* ${new Date().toLocaleTimeString('es-MX')}
 ⏱️ *DURACIÓN:* ${CONFIG.simulacros.duracionMinutos} minutos
+
+${simulacro.magnitud >= 7.0 ? '⚠️ *MAGNITUD ALTA - EVACUACIÓN INMEDIATA*' : simulacro.magnitud >= 6.0 ? '⚡ *MAGNITUD MODERADA - BUSCAR REFUGIO*' : '💡 *MAGNITUD BAJA - MANTENER PRECAUCIÓN*'}
 
 💰 *RECOMPENSAS:*
 • ${CONFIG.simulacros.puntosParticipacion} puntos por participar
@@ -3310,6 +3351,10 @@ Para cancelar: !simulacro cancelar ${simulacroId}
         }, CONFIG.simulacros.duracionMinutos * 60 * 1000);
 
         logToFile('SIMULACRO', `Iniciado: ${simulacro.titulo}`);
+        } catch (error) {
+            console.error('❌ Error iniciando simulacro:', error.message);
+            logToFile('ERROR', `iniciarSimulacroCore: ${error.message}`);
+        }
     }
 
     async finalizarSimulacroAutomatico(simulacroId) {
@@ -3347,6 +3392,7 @@ Para cancelar: !simulacro cancelar ${simulacroId}
     }
 
     async finalizarSimulacroCore(simulacro) {
+        try {
         const data = loadData();
         const simIndex = data.simulacros.findIndex(s => s.id === simulacro.id);
         
@@ -3387,6 +3433,10 @@ Para cancelar: !simulacro cancelar ${simulacroId}
         }, CONFIG.simulacros.tiempoEvaluacion * 60 * 1000);
 
         logToFile('SIMULACRO', `Finalizado: ${simulacro.titulo} - ${participantes} participantes`);
+        } catch (error) {
+            console.error('❌ Error finalizando simulacro:', error.message);
+            logToFile('ERROR', `finalizarSimulacroCore: ${error.message}`);
+        }
     }
 
     async evaluarSimulacroAutomatico(simulacroId) {
@@ -3494,6 +3544,7 @@ Para cancelar: !simulacro cancelar ${simulacroId}
             programados.forEach(s => {
                 const fecha = new Date(s.fechaHora);
                 lista += `├─ [${s.id}] ${s.titulo}\n`;
+                lista += `│  ├─ Magnitud: ${s.magnitud} | ${s.lugar}\n`;
                 lista += `│  └─ ${fecha.toLocaleDateString('es-MX')} ${fecha.toLocaleTimeString('es-MX')}\n\n`;
             });
         }
@@ -3598,6 +3649,8 @@ Para cancelar: !simulacro cancelar ${simulacroId}
 
 🆔 *ID:* ${simulacro.id}
 📋 *Título:* ${simulacro.titulo}
+📊 *Magnitud:* ${simulacro.magnitud} Richter
+📍 *Epicentro:* ${simulacro.lugar}
 📊 *Estado:* ${simulacro.estado.toUpperCase()}
 
 👥 *PARTICIPACIÓN:*
@@ -3674,6 +3727,7 @@ Para cancelar: !simulacro cancelar ${simulacroId}
 
     async registrarParticipacion(userId) {
         try {
+        try {
             const data = loadData();
             
             if (!data.simulacros) return;
@@ -3719,6 +3773,11 @@ Para cancelar: !simulacro cancelar ${simulacroId}
             
         } catch (error) {
             console.error('Error registrando participación:', error.message);
+            logToFile('ERROR', `registrarParticipacion: ${error.message}`);
+        }
+        } catch (fatalError) {
+            console.error('💀 ERROR FATAL en registrarParticipacion:', fatalError.message);
+            logToFile('FATAL', `registrarParticipacion FATAL: ${fatalError.message}`);
         }
     }
 
@@ -4776,21 +4835,35 @@ Escribe el comando completo para más información.
     // ═══════════════════════════════════════════════════════════════════════
     
     startMonitoring() {
-        // Inicializar navegador para imágenes
-        initImageBrowser().catch(err => {
-            console.error('⚠️ Error browser:', err.message);
-        });
-        
-        // Primera verificación
-        setTimeout(() => this.checkForAlerts(true), 5000);
-        
-        // Verificaciones periódicas
-        this.checkIntervalId = setInterval(
-            () => this.checkForAlerts(false),
-            CONFIG.checkInterval * 1000
-        );
-        
-        console.log(`
+        try {
+            // Inicializar navegador para imágenes con protección
+            safeExecuteAsync(
+                async () => await initImageBrowser(),
+                null,
+                'Error inicializando navegador'
+            ).catch(err => {
+                console.error('⚠️ Error browser:', err.message);
+            });
+            
+            // Primera verificación con protección
+            setTimeout(() => {
+                safeExecuteAsync(
+                    async () => await this.checkForAlerts(true),
+                    null,
+                    'Error en verificación inicial'
+                );
+            }, 5000);
+            
+            // Verificaciones periódicas con protección
+            this.checkIntervalId = setInterval(() => {
+                safeExecuteAsync(
+                    async () => await this.checkForAlerts(false),
+                    null,
+                    'Error en verificación periódica'
+                );
+            }, CONFIG.checkInterval * 1000);
+            
+            console.log(`
 ╔════════════════════════════════════════════════════════════════╗
 ║       🌋 BOT SASMEX WHATSAPP INICIADO 🌋                       ║
 ╠════════════════════════════════════════════════════════════════╣
@@ -4800,7 +4873,17 @@ Escribe el comando completo para más información.
 ║   👥 Suscriptores: ${String(this.subscribers.length).padEnd(3)}                                    ║
 ║   📝 Prefijo: ${CONFIG.prefix}                                              ║
 ╚════════════════════════════════════════════════════════════════╝
-        `);
+            `);
+        } catch (error) {
+            console.error('❌ Error iniciando monitoreo:', error.message);
+            logToFile('ERROR', `startMonitoring: ${error.message}`);
+            
+            // Reintentar después de 5 segundos
+            setTimeout(() => {
+                console.log('🔄 Reintentando iniciar monitoreo...');
+                this.startMonitoring();
+            }, 5000);
+        }
     }
     
     getUptime() {
@@ -4872,15 +4955,32 @@ console.log(`
 
 let bot = null;
 
-// Manejo de errores globales
+// 🛡️ MANEJO DE ERRORES GLOBALES ULTRA ROBUSTO
 process.on('uncaughtException', (err) => {
-    console.error('❌ Error no capturado:', err.message);
-    logToFile('ERROR', `Uncaught: ${err.message}`);
+    console.error('❌ ERROR CRÍTICO NO CAPTURADO:', err.message);
+    console.error('Stack:', err.stack);
+    logToFile('CRITICAL', `Uncaught Exception: ${err.message}\n${err.stack}`);
+    
+    // NO DETENER EL BOT - Solo registrar
+    console.log('🛡️ Bot continúa ejecutándose...');
 });
 
-process.on('unhandledRejection', (reason) => {
-    console.error('❌ Promesa rechazada:', reason);
-    logToFile('ERROR', `Unhandled: ${reason}`);
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ PROMESA RECHAZADA NO MANEJADA:', reason);
+    logToFile('CRITICAL', `Unhandled Rejection: ${reason}\nPromise: ${util.inspect(promise)}`);
+    
+    // NO DETENER EL BOT - Solo registrar
+    console.log('🛡️ Bot continúa ejecutándose...');
+});
+
+process.on('warning', (warning) => {
+    console.warn('⚠️ Advertencia:', warning.name, warning.message);
+    logToFile('WARNING', `${warning.name}: ${warning.message}`);
+});
+
+process.on('error', (err) => {
+    console.error('❌ Error de proceso:', err.message);
+    logToFile('ERROR', `Process Error: ${err.message}`);
 });
 
 // Manejo de cierre
@@ -4888,9 +4988,13 @@ async function gracefulShutdown(signal) {
     console.log(`\n⏹️ ${signal} recibido...`);
     
     if (bot) {
-        await bot.stop();
+        await bot.stop().catch(err => {
+            console.error('❌ Error deteniendo bot:', err.message);
+        });
     } else {
-        await closeImageBrowser();
+        await closeImageBrowser().catch(err => {
+            console.error('❌ Error cerrando navegador:', err.message);
+        });
     }
     
     console.log('👋 ¡Adiós!');
@@ -4900,12 +5004,43 @@ async function gracefulShutdown(signal) {
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
-// INICIAR BOT
-try {
-    bot = new SasmexWhatsAppBot();
-    bot.start();
-} catch (error) {
-    console.error('❌ Error fatal:', error.message);
-    logToFile('ERROR', `Fatal: ${error.message}`);
-    process.exit(1);
+// 🚀 SISTEMA DE INICIO CON AUTO-RECUPERACIÓN INFINITA
+let initAttempts = 0;
+const MAX_INIT_ATTEMPTS = 10;
+
+async function initBot() {
+    try {
+        console.log('🤖 Iniciando bot SASMEX...');
+        bot = new SasmexWhatsAppBot();
+        await bot.start();
+        console.log('✅ Bot iniciado exitosamente');
+        initAttempts = 0; // Resetear contador
+    } catch (error) {
+        initAttempts++;
+        console.error(`❌ Error iniciando bot (intento ${initAttempts}/${MAX_INIT_ATTEMPTS}):`, error.message);
+        logToFile('ERROR', `Init Error (${initAttempts}/${MAX_INIT_ATTEMPTS}): ${error.message}\n${error.stack}`);
+        
+        if (initAttempts < MAX_INIT_ATTEMPTS) {
+            const retryDelay = Math.min(5000 * initAttempts, 30000);
+            console.log(`🔄 Reintentando en ${retryDelay/1000} segundos...`);
+            setTimeout(() => initBot(), retryDelay);
+        } else {
+            console.error('💀 Máximo de intentos alcanzado. Reiniciando en 60 segundos...');
+            setTimeout(() => {
+                initAttempts = 0;
+                initBot();
+            }, 60000);
+        }
+    }
 }
+
+// Iniciar bot
+initBot();
+
+// Monitor de salud cada minuto
+setInterval(() => {
+    if (bot && !bot.isReady) {
+        console.log('⚠️ Bot no está listo. Verificando estado...');
+        logToFile('WARNING', 'Bot not ready - monitoring');
+    }
+}, 60000);
