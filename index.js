@@ -567,6 +567,23 @@ async function getWebContent() {
         const title = entry.title || 'Alerta Sísmica';
         const updated = entry.updated || entry.pubDate || new Date().toISOString();
         
+        function stripRssBoilerplate(text) {
+            if (!text || typeof text !== 'string') return '';
+            return text
+                .split(/\r?\n/)
+                .filter(line => {
+                    const t = line.trim();
+                    if (!t) return false;
+                    if (/^ALERTA\s+SÍSMICA\s+SASMEX$/i.test(t)) return false;
+                    if (/^Sistema\s+de\s+Alerta\s+Sísmica\s+Mexicano$/i.test(t)) return false;
+                    if (/Consulta:\s*https?:\/\/cires\.org\.mx\/reportes_sasmex\//i.test(t)) return false;
+                    if (/^[━─]+/.test(t) && /Consulta:/i.test(t)) return false;
+                    return true;
+                })
+                .join('\n')
+                .trim();
+        }
+        
         let description = '';
         let headline = title;
         let severity = 'Unknown';
@@ -575,7 +592,7 @@ async function getWebContent() {
             if (typeof entry.content === 'string') {
                 description = String(entry.content);
             } else if (entry.content && entry.content.alert && entry.content.alert.info) {
-                const info = entry.content.alert.info;
+                const info = Array.isArray(entry.content.alert.info) ? entry.content.alert.info[0] : entry.content.alert.info;
                 headline = info.headline || title;
                 description = info.description ? String(info.description) : '';
                 severity = info.severity ? String(info.severity) : 'Unknown';
@@ -591,15 +608,20 @@ async function getWebContent() {
                 ? String(entry.summary)
                 : (entry.summary && entry.summary._ ? String(entry.summary._) : '');
         }
+        description = stripRssBoilerplate(description);
         
         const dateMatch = title.match(/(\d{1,2}\s+\w+\s+\d{4}\s+\d{2}:\d{2}:\d{2})/i);
         const fecha = dateMatch ? dateMatch[1] : formatDate(updated);
         
         let severidad = 'Severidad: Moderada';
         const descLower = String(description || '').toLowerCase();
+        const headlineLower = String(headline || '').toLowerCase();
+        const titleLower = String(title || '').toLowerCase();
         const sevLower = String(severity || '').toLowerCase();
+        const textLower = [descLower, headlineLower, titleLower].join(' ');
         
-        if (sevLower.includes('minor') || descLower.includes('no ameritó') || descLower.includes('preventiv')) {
+        if (sevLower.includes('minor') || descLower.includes('no ameritó') || descLower.includes('preventiv') ||
+            textLower.includes('sismo moderado')) {
             severidad = 'Severidad: Menor';
         } else if (sevLower.includes('severe') || sevLower.includes('extreme') ||
                    descLower.includes('ameritó alerta') || descLower.includes('alerta pública')) {
@@ -801,8 +823,7 @@ async function generateAlertImage(alertData) {
             <div class="card">
                 <div class="header">
                     <div class="alert-icons">🚨🚨🚨</div>
-                    <div class="title">Alerta Sísmica</div>
-                    <div class="subtitle">Sistema de Alerta Sísmica Mexicano</div>
+                    <div class="title">Alerta</div>
                 </div>
                 
                 <div class="divider"></div>
