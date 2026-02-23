@@ -2,27 +2,15 @@
  * ═══════════════════════════════════════════════════════════════════════════
  *                        BOT DE ALERTAS SASMEX
  *                         VERSIÓN WHATSAPP
- *                  ✅ CÓDIGO CORREGIDO v1.0 + HEROKU FULL
  * ═══════════════════════════════════════════════════════════════════════════
  */
-
-// Detectar si está en Heroku
-const IS_HEROKU = !!process.env.DYNO;
-const PORT = process.env.PORT || 3000;
-
-// Configurar variables de entorno para Heroku
-if (IS_HEROKU) {
-    // Puppeteer descargará Chromium automáticamente en Heroku
-    // No necesita configuración adicional
-    console.log('🟢 Modo HEROKU detectado');
-}
 
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const qrcode = require('qrcode-terminal');
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
-const xml2js = require('xml2js');
+const { XMLParser } = require('fast-xml-parser');
 const util = require('util');
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -45,8 +33,8 @@ if (typeof globalThis.fetch === 'undefined') {
 //                              CONFIGURACIÓN
 // ═══════════════════════════════════════════════════════════════════════════
 
-// Configurar rutas de archivos según ambiente
-const DATA_DIR = IS_HEROKU ? (process.env.HOME || '/tmp') : __dirname;
+// Ruta de datos (misma carpeta del proyecto)
+const DATA_DIR = __dirname;
 
 const CONFIG = {
     // Admin (número con código de país, sin + ni espacios)
@@ -78,26 +66,18 @@ const CONFIG = {
     maxConsecutiveErrors: 20,
     errorResetTime: 300000, // 5 minutos
     
-    // Puppeteer para imágenes
-    puppeteerOptions: {
-        headless: 'new',
-        args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--disable-gpu',
-            '--window-size=800,600',
-            '--disable-web-security',
-            '--disable-features=VizDisplayCompositor',
-            '--disable-blink-features=AutomationControlled',
-            '--disable-extensions',
-            '--single-process'
-        ]
-    },
-    
     // Prefijo de comandos
     prefix: '!',
+    
+    // Versión del bot (innovaciones)
+    version: '2.0.0-innovador',
+    
+    // Rate limiting (comandos por usuario)
+    rateLimitMax: 25,
+    rateLimitWindowMs: 60000,
+    
+    // Historial de alertas en memoria/disco
+    alertHistoryMax: 15,
     
     // Configuración de simulacros
     simulacros: {
@@ -106,6 +86,12 @@ const CONFIG = {
         puntosParticipacion: 50,
         puntosCompletacion: 100,
         tiempoEvaluacion: 30 // minutos después
+    },
+    
+    // Datadog (métricas a us5.datadoghq.com)
+    datadog: {
+        apiKey: '2e9e759d93f4bf62a7d9ce3911b2d809',
+        site: 'us5'
     }
 };
 
@@ -234,7 +220,7 @@ function loadData() {
             fs.copyFileSync(CONFIG.dataFile, backupFile);
         }
     }
-    return { users: {}, groups: {}, lastContent: '', lastAlert: null };
+    return { users: {}, groups: {}, lastContent: '', lastAlert: null, alertHistory: [], recordatorios: [] };
 }
 
 function saveData(data) {
@@ -281,6 +267,73 @@ function clearLogs() {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+//                        DATADOG (US5) - MÉTRICAS VÍA NODE.JS
+// ═══════════════════════════════════════════════════════════════════════════
+// Librería: datadog-metrics (npm). Dashboard: https://us5.datadoghq.com
+
+let datadogMetrics = null;
+function initDatadog() {
+    const cfg = CONFIG.datadog;
+    if (!cfg || !cfg.apiKey) return;
+    try {
+        datadogMetrics = require('datadog-metrics');
+        const site = (cfg.site || 'us5') === 'us5' ? 'us5.datadoghq.com' : (cfg.site || 'datadoghq.com');
+        datadogMetrics.init({
+            apiKey: cfg.apiKey,
+            site,
+            defaultTags: ['service:sasmex-bot'],
+            flushIntervalSeconds: 0,
+            onError: (err) => console.error('Datadog flush error:', err.message)
+        });
+    } catch (e) {
+        console.error('Datadog init error:', e.message);
+    }
+}
+function datadogGauge(metric, value, tags = []) {
+    if (!datadogMetrics) return;
+    try {
+        datadogMetrics.gauge(metric, value, tags);
+        datadogFlush();
+    } catch (e) {
+        console.error('Datadog gauge error:', e.message);
+    }
+}
+function datadogIncrement(metric, tags = []) {
+    if (!datadogMetrics) return;
+    try {
+        datadogMetrics.increment(metric, 1, tags);
+        datadogFlush();
+    } catch (e) {
+        console.error('Datadog increment error:', e.message);
+    }
+}
+function datadogFlush() {
+    if (datadogMetrics && typeof datadogMetrics.flush === 'function') {
+        datadogMetrics.flush().catch((err) => console.error('Datadog flush:', err && err.message));
+    }
+}
+function datadogEvent(title, text, alertType = 'error') {
+    const cfg = CONFIG.datadog;
+    if (!cfg || !cfg.apiKey) return;
+    const site = (cfg.site || 'us5') === 'us5' ? 'us5' : (cfg.site || 'us5');
+    const host = site.replace(/\.datadoghq\.com$/i, '');
+    const apiHost = host === 'datadoghq' ? 'https://api.datadoghq.com' : `https://api.${host}.datadoghq.com`;
+    const url = `${apiHost}/api/v1/events`;
+    const body = JSON.stringify({
+        title: String(title).slice(0, 200),
+        text: String(text).slice(0, 4000),
+        alert_type: alertType,
+        tags: ['service:sasmex-bot', 'source:bot']
+    });
+    fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'DD-API-KEY': cfg.apiKey },
+        body
+    }).catch(() => {});
+}
+initDatadog();
+
+// ═══════════════════════════════════════════════════════════════════════════
 //                        GESTIÓN DE SUSCRIPTORES
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -315,6 +368,7 @@ function addSubscriber(chatId, isGroup = false) {
             subscribed: true,
             severity: 'all',
             muted: false,
+            soloTexto: false,
             joinedAt: new Date().toISOString()
         };
         if (saveData(data)) {
@@ -363,7 +417,8 @@ function getUserConfig(chatId) {
     return {
         subscribed: false,
         severity: 'all',
-        muted: false
+        muted: false,
+        soloTexto: false
     };
 }
 
@@ -378,7 +433,8 @@ function updateUserConfig(chatId, updates, isGroup = false) {
         data[collection][id] = {
             subscribed: false,
             severity: 'all',
-            muted: false
+            muted: false,
+            soloTexto: false
         };
     }
     
@@ -393,6 +449,10 @@ function setUserSeverity(chatId, severity, isGroup = false) {
 
 function setUserMuted(chatId, muted, isGroup = false) {
     return updateUserConfig(chatId, { muted }, isGroup);
+}
+
+function setUserSoloTexto(chatId, soloTexto, isGroup = false) {
+    return updateUserConfig(chatId, { soloTexto: !!soloTexto }, isGroup);
 }
 
 function shouldSendAlert(chatId, alertSeverity) {
@@ -429,6 +489,61 @@ function setLastContent(content) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+//                    HISTORIAL DE ALERTAS (innovación)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function getAlertHistory() {
+    const data = loadData();
+    if (!Array.isArray(data.alertHistory)) data.alertHistory = [];
+    return data.alertHistory;
+}
+
+function pushAlertToHistory(alertData) {
+    if (!alertData || typeof alertData !== 'object') return;
+    const data = loadData();
+    if (!Array.isArray(data.alertHistory)) data.alertHistory = [];
+    data.alertHistory.unshift({
+        fecha: alertData.fecha,
+        evento: alertData.evento,
+        severidad: alertData.severidad || 'Moderada',
+        identifier: alertData.identifier,
+        at: new Date().toISOString()
+    });
+    if (data.alertHistory.length > (CONFIG.alertHistoryMax || 15)) {
+        data.alertHistory = data.alertHistory.slice(0, CONFIG.alertHistoryMax);
+    }
+    saveData(data);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+//                    RECORDATORIOS PERSONALIZADOS (innovación)
+// ═══════════════════════════════════════════════════════════════════════════
+
+function getRecordatorios() {
+    const data = loadData();
+    if (!Array.isArray(data.recordatorios)) data.recordatorios = [];
+    return data.recordatorios;
+}
+
+function addRecordatorio(chatId, texto, atMs) {
+    const data = loadData();
+    if (!Array.isArray(data.recordatorios)) data.recordatorios = [];
+    const id = 'r' + Date.now() + '-' + Math.random().toString(36).slice(2, 8);
+    data.recordatorios.push({ id, chatId, texto, at: Date.now() + atMs, createdAt: new Date().toISOString() });
+    saveData(data);
+    return id;
+}
+
+function removeRecordatorio(id) {
+    const data = loadData();
+    if (!Array.isArray(data.recordatorios)) return false;
+    const len = data.recordatorios.length;
+    data.recordatorios = data.recordatorios.filter(r => r.id !== id);
+    if (data.recordatorios.length < len) { saveData(data); return true; }
+    return false;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 //                    PUPPETEER - NAVEGADOR PARA IMÁGENES
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -456,7 +571,7 @@ async function initImageBrowser() {
     
     try {
         console.log('🌐 Iniciando navegador para imágenes...');
-        imageBrowser = await puppeteer.launch(CONFIG.puppeteerOptions);
+        imageBrowser = await puppeteer.launch({ headless: true });
         
         imageBrowser.on('disconnected', () => {
             console.log('⚠️ Browser desconectado');
@@ -532,14 +647,13 @@ async function getWebContent() {
             throw new Error('Respuesta vacía del servidor');
         }
         
-        const parser = new xml2js.Parser({
-            explicitArray: false,
-            ignoreAttrs: false,
-            trim: true
+        const parser = new XMLParser({
+            removeNSPrefix: true,
+            ignoreAttributes: false,
+            trimValues: true,
+            isArray: (name) => name === 'entry' || name === 'item' || name === 'info' || name === 'area'
         });
-        
-        const parseString = util.promisify(parser.parseString.bind(parser));
-        const result = await parseString(xmlText);
+        const result = parser.parse(xmlText);
         
         if (!result) {
             throw new Error('Error parseando XML');
@@ -547,13 +661,11 @@ async function getWebContent() {
         
         let entry = null;
         if (result.feed && result.feed.entry) {
-            entry = Array.isArray(result.feed.entry)
-                ? result.feed.entry[0]
-                : result.feed.entry;
+            const entries = result.feed.entry;
+            entry = Array.isArray(entries) ? entries[0] : entries;
         } else if (result.rss && result.rss.channel && result.rss.channel.item) {
-            entry = Array.isArray(result.rss.channel.item)
-                ? result.rss.channel.item[0]
-                : result.rss.channel.item;
+            const items = result.rss.channel.item;
+            entry = Array.isArray(items) ? items[0] : items;
         }
         
         if (!entry) {
@@ -566,21 +678,31 @@ async function getWebContent() {
         const id = entry.id || entry.guid || entry.link || '';
         const title = entry.title || 'Alerta Sísmica';
         const updated = entry.updated || entry.pubDate || new Date().toISOString();
-        
+
+        let rssDateStr = updated;
+        if (entry.content && entry.content.alert && entry.content.alert.info) {
+            const info = Array.isArray(entry.content.alert.info) ? entry.content.alert.info[0] : entry.content.alert.info;
+            if (info && (info.sent || info.effective || info.onset)) rssDateStr = info.sent || info.effective || info.onset;
+        }
+
+        const linkConsultaRegex = /Consulta:\s*https?:\/\/cires\.org\.mx\/reportes_sasmex\/[^\s\]\)\"']*/gi;
         function stripRssBoilerplate(text) {
             if (!text || typeof text !== 'string') return '';
             return text
                 .split(/\r?\n/)
+                .map(line => line.replace(linkConsultaRegex, '').trim())
                 .filter(line => {
-                    const t = line.trim();
+                    const t = line;
                     if (!t) return false;
                     if (/^ALERTA\s+SÍSMICA\s+SASMEX$/i.test(t)) return false;
                     if (/^Sistema\s+de\s+Alerta\s+Sísmica\s+Mexicano$/i.test(t)) return false;
-                    if (/Consulta:\s*https?:\/\/cires\.org\.mx\/reportes_sasmex\//i.test(t)) return false;
+                    if (/^Consulta:\s*https?:\/\/cires\.org\.mx\/reportes_sasmex\//i.test(t)) return false;
                     if (/^[━─]+/.test(t) && /Consulta:/i.test(t)) return false;
                     return true;
                 })
                 .join('\n')
+                .replace(linkConsultaRegex, '')
+                .replace(/\n{3,}/g, '\n\n')
                 .trim();
         }
         
@@ -589,15 +711,23 @@ async function getWebContent() {
         let severity = 'Unknown';
         
         if (entry.content) {
+            let contentStr = '';
             if (typeof entry.content === 'string') {
-                description = String(entry.content);
+                contentStr = description = String(entry.content);
             } else if (entry.content && entry.content.alert && entry.content.alert.info) {
                 const info = Array.isArray(entry.content.alert.info) ? entry.content.alert.info[0] : entry.content.alert.info;
                 headline = info.headline || title;
                 description = info.description ? String(info.description) : '';
                 severity = info.severity ? String(info.severity) : 'Unknown';
+                if (severity === 'Unknown' && String(info.responseType || '').toLowerCase() === 'monitor') severity = 'Minor';
             } else if (entry.content && entry.content._) {
-                description = String(entry.content._);
+                contentStr = description = String(entry.content._);
+            }
+            if (contentStr && severity === 'Unknown') {
+                const sevTag = contentStr.match(/<severity[^>]*>([^<]+)<\/severity>/i);
+                if (sevTag) severity = sevTag[1].trim();
+                if (/severidad\s*:\s*menor|severidad\s+menor/i.test(contentStr)) severity = 'Minor';
+                if (/<responseType[^>]*>\s*Monitor\s*<\/responseType>/i.test(contentStr)) severity = 'Minor';
             }
         } else if (entry.description) {
             description = typeof entry.description === 'string'
@@ -609,36 +739,111 @@ async function getWebContent() {
                 : (entry.summary && entry.summary._ ? String(entry.summary._) : '');
         }
         description = stripRssBoilerplate(description);
-        
-        const dateMatch = title.match(/(\d{1,2}\s+\w+\s+\d{4}\s+\d{2}:\d{2}:\d{2})/i);
-        const fecha = dateMatch ? dateMatch[1] : formatDate(updated);
-        
-        let severidad = 'Severidad: Moderada';
+
+        const fecha = formatDate(rssDateStr);
+
         const descLower = String(description || '').toLowerCase();
         const headlineLower = String(headline || '').toLowerCase();
         const titleLower = String(title || '').toLowerCase();
+        if (severity === 'Unknown' && /severidad\s*:?\s*menor|severidad\s+menor/i.test([descLower, headlineLower, titleLower].join(' '))) severity = 'Minor';
         const sevLower = String(severity || '').toLowerCase();
         const textLower = [descLower, headlineLower, titleLower].join(' ');
-        
-        if (sevLower.includes('minor') || descLower.includes('no ameritó') || descLower.includes('preventiv') ||
-            textLower.includes('sismo moderado')) {
-            severidad = 'Severidad: Menor';
-        } else if (sevLower.includes('severe') || sevLower.includes('extreme') ||
-                   descLower.includes('ameritó alerta') || descLower.includes('alerta pública')) {
-            severidad = 'Severidad: Mayor';
+
+        let severidad;
+        if (sevLower && sevLower !== 'unknown') {
+            if (sevLower.includes('minor') || sevLower.includes('menor')) severidad = 'Severidad: Menor';
+            else if (sevLower.includes('severe') || sevLower.includes('extreme') || sevLower.includes('major') || sevLower.includes('mayor')) severidad = 'Severidad: Mayor';
+            else if (sevLower.includes('moderate') || sevLower.includes('moderad')) severidad = 'Severidad: Moderada';
+            else severidad = 'Severidad: Moderada';
+        } else {
+            if (textLower.includes('mayor') || textLower.includes('ameritó alerta') || textLower.includes('alerta pública') || textLower.includes('fuerte') || textLower.includes('severe') || textLower.includes('extreme')) {
+                severidad = 'Severidad: Mayor';
+            } else if (
+                textLower.includes('menor') || textLower.includes('no ameritó') || textLower.includes('preventiv') || textLower.includes('minor') ||
+                textLower.includes('sismo finalizado') || textLower.includes('finalizado') || textLower.includes('evento concluido') || textLower.includes('concluido') ||
+                textLower.includes('no ameritó alerta')
+            ) {
+                severidad = 'Severidad: Menor';
+            } else if (textLower.includes('moderad') || textLower.includes('moderate')) {
+                severidad = 'Severidad: Moderada';
+            } else {
+                severidad = 'Severidad: Moderada';
+            }
         }
-        
+
+        if (textLower.includes('no ameritó') || textLower.includes('no ameritó alerta') || /sismo\s+finalizado|evento\s+concluido/i.test(textLower)) {
+            severidad = 'Severidad: Menor';
+        }
+
+        let eventoTexto = (headline || title || '').trim().replace(linkConsultaRegex, '').replace(/\s{2,}/g, ' ').trim();
+        if (eventoTexto && !severidad.includes('Mayor')) {
+            const tieneAmericoAlerta = /amerit[oó]\s+alerta\s*s[ií]smica?/i.test(eventoTexto);
+            if (tieneAmericoAlerta) {
+                if (severidad.includes('Menor')) {
+                    eventoTexto = eventoTexto.replace(/(que\s+)?amerit[oó]\s+alerta\s*s[ií]smica?/gi, 'no ameritó alerta').replace(/\s{2,}/g, ' ').trim();
+                } else {
+                    eventoTexto = eventoTexto.replace(/\s*[,.\-–—]?\s*(que\s+)?amerit[oó]\s+alerta\s*s[ií]smica?\.?/gi, '').replace(/\s{2,}/g, ' ').trim();
+                }
+            }
+        }
+
+        // Extraer magnitud y distancia del RSS para fórmula de Mercalli (si vienen en CAP/descripción)
+        let magnitud = null;
+        let distanciaKm = null;
+        if (entry.content && entry.content.alert && entry.content.alert.info) {
+            const info = Array.isArray(entry.content.alert.info) ? entry.content.alert.info[0] : entry.content.alert.info;
+            if (info && info.parameter) {
+                const params = Array.isArray(info.parameter) ? info.parameter : [info.parameter];
+                for (const p of params) {
+                    const name = (p.valueName || p.name || '').toString().toLowerCase();
+                    const val = p.value != null ? String(p.value).trim() : '';
+                    if (name.includes('magnitud') || name === 'magnitude') {
+                        const v = parseFloat(val.replace(',', '.'));
+                        if (!Number.isNaN(v) && v >= 0 && v <= 10) magnitud = v;
+                    } else if (name.includes('distancia') || name.includes('distance') || name === 'radius') {
+                        const d = parseInt(val, 10);
+                        if (!Number.isNaN(d) && d >= 1 && d <= 2000) distanciaKm = d;
+                    }
+                }
+            }
+        }
+        if (magnitud == null || distanciaKm == null) {
+            const ext = extraerMagnitudYDistancia(description + ' ' + (headline || '') + ' ' + (title || ''));
+            if (magnitud == null && ext.magnitud != null) magnitud = ext.magnitud;
+            if (distanciaKm == null && ext.distanciaKm != null) distanciaKm = ext.distanciaKm;
+        }
+
+        // Epicentro desde CAP: centroide del polígono del área afectada (no del área epicentral)
+        let epicenterLat = null;
+        let epicenterLon = null;
+        let areaDesc = null;
+        if (entry.content && entry.content.alert && entry.content.alert.info) {
+            const info = Array.isArray(entry.content.alert.info) ? entry.content.alert.info[0] : entry.content.alert.info;
+            const epic = obtenerEpicentroDesdeCap(info);
+            if (epic.epicenterLat != null && epic.epicenterLon != null) {
+                epicenterLat = epic.epicenterLat;
+                epicenterLon = epic.epicenterLon;
+            }
+            if (epic.areaDesc) areaDesc = epic.areaDesc;
+        }
+
         console.log('✅ RSS obtenido correctamente');
-        
+
         return {
             success: true,
             data: {
                 fecha: fecha,
-                evento: headline || title,
+                fechaCorta: formatDateCorta(rssDateStr),
+                evento: eventoTexto || headline || title,
                 severidad: severidad,
                 rssTitle: title,
                 rawText: description,
-                identifier: id
+                identifier: id,
+                magnitud: magnitud,
+                distanciaKm: distanciaKm,
+                epicenterLat: epicenterLat,
+                epicenterLon: epicenterLon,
+                areaDesc: areaDesc
             }
         };
         
@@ -689,6 +894,325 @@ function formatDate(isoString) {
     }
 }
 
+/** Formato DD/MM/YYYY HH:MM:SS para alertas (hora del RSS, zona America/Mexico_City). */
+function formatDateCorta(isoString) {
+    try {
+        const d = new Date(isoString);
+        const s = d.toLocaleString('es-MX', {
+            timeZone: 'America/Mexico_City',
+            day: '2-digit',
+            month: '2-digit',
+            year: 'numeric',
+            hour: '2-digit',
+            minute: '2-digit',
+            second: '2-digit',
+            hour12: false
+        });
+        return s.replace(/\s*,\s*/, ' ').trim();
+    } catch {
+        return isoString || 'N/A';
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// EPICENTRO DESDE CAP: CENTROIDE DEL POLÍGONO DE ÁREA AFECTADA
+// ═══════════════════════════════════════════════════════════════════════════
+// El CAP envía el polígono del *área afectada*, no del epicentro. Se toma como
+// epicentro el centro de esa área (centroide) para ETA y ubicación (investigación
+// de operaciones / geometría analítica). Referencia: CAP 1.2 OASIS, polygon/circle.
+
+/**
+ * Parsea cadena CAP polygon: "lat1,lon1 lat2,lon2 ..." (WGS 84).
+ * Acepta tercer valor opcional (altitud). Devuelve array de [lat, lon].
+ */
+function parseCapPolygon(str) {
+    if (!str || typeof str !== 'string') return [];
+    const tokens = str.trim().split(/\s+/);
+    const puntos = [];
+    for (const t of tokens) {
+        const parts = t.split(',');
+        const lat = parseFloat(parts[0]);
+        const lon = parseFloat(parts[1]);
+        if (Number.isNaN(lat) || Number.isNaN(lon)) continue;
+        if (lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180) puntos.push([lat, lon]);
+    }
+    return puntos;
+}
+
+/**
+ * Parsea cadena CAP circle: "lat,lon radius" (centro WGS 84, radio en km).
+ * Devuelve { lat, lon, radiusKm } o null.
+ */
+function parseCapCircle(str) {
+    if (!str || typeof str !== 'string') return null;
+    const trimmed = str.trim();
+    const lastSpace = trimmed.lastIndexOf(' ');
+    if (lastSpace <= 0) return null;
+    const coordStr = trimmed.slice(0, lastSpace).trim();
+    const radiusStr = trimmed.slice(lastSpace + 1).trim();
+    const [lat, lon] = coordStr.split(',').map(s => parseFloat(s.trim()));
+    const radiusKm = parseFloat(radiusStr);
+    if (Number.isNaN(lat) || Number.isNaN(lon) || Number.isNaN(radiusKm)) return null;
+    if (lat < -90 || lat > 90 || lon < -180 || lon > 180 || radiusKm < 0) return null;
+    return { lat, lon, radiusKm };
+}
+
+/**
+ * Centroide (centro de masa) de un polígono en WGS 84 (lat, lon).
+ * Fórmula: área signed y centroide por suma sobre aristas (Geometría analítica).
+ * A = 0.5 * sum_i (x_i*y_{i+1} - x_{i+1}*y_i), luego Cx, Cy con factor 1/(6A).
+ * Aquí x = lon, y = lat para que el resultado sea [lat_centroide, lon_centroide].
+ */
+function centroidePoligono(puntos) {
+    if (!Array.isArray(puntos) || puntos.length < 3) return null;
+    const n = puntos.length;
+    let A = 0;
+    let Cx = 0;
+    let Cy = 0;
+    for (let i = 0; i < n; i++) {
+        const j = (i + 1) % n;
+        const xi = puntos[i][1];
+        const yi = puntos[i][0];
+        const xj = puntos[j][1];
+        const yj = puntos[j][0];
+        const cross = xi * yj - xj * yi;
+        A += cross;
+        Cx += (xi + xj) * cross;
+        Cy += (yi + yj) * cross;
+    }
+    A *= 0.5;
+    if (Math.abs(A) < 1e-10) return null;
+    const k = 1 / (6 * A);
+    const lonC = Cx * k;
+    const latC = Cy * k;
+    return [latC, lonC];
+}
+
+/**
+ * Obtiene epicentro desde bloques CAP info/area: polígono → centroide; circle → centro.
+ * El CAP manda el polígono del área afectada; se usa su centro como epicentro (Oaxaca → centro de Oaxaca).
+ * Devuelve { epicenterLat, epicenterLon, areaDesc } o campos null si no hay datos.
+ */
+function obtenerEpicentroDesdeCap(info) {
+    const out = { epicenterLat: null, epicenterLon: null, areaDesc: null };
+    if (!info || typeof info !== 'object') return out;
+    const areas = info.area != null ? (Array.isArray(info.area) ? info.area : [info.area]) : [];
+    let areaDescText = null;
+    for (const ar of areas) {
+        if (!ar || typeof ar !== 'object') continue;
+        if (ar.areaDesc && typeof ar.areaDesc === 'string' && ar.areaDesc.trim()) {
+            if (!areaDescText) areaDescText = ar.areaDesc.trim();
+        }
+        if (ar.polygon && typeof ar.polygon === 'string') {
+            const puntos = parseCapPolygon(ar.polygon);
+            const cent = centroidePoligono(puntos);
+            if (cent) {
+                out.epicenterLat = cent[0];
+                out.epicenterLon = cent[1];
+                if (areaDescText) out.areaDesc = areaDescText;
+                return out;
+            }
+        }
+        if (ar.circle && typeof ar.circle === 'string') {
+            const circle = parseCapCircle(ar.circle);
+            if (circle) {
+                out.epicenterLat = circle.lat;
+                out.epicenterLon = circle.lon;
+                if (areaDescText) out.areaDesc = areaDescText;
+                return out;
+            }
+        }
+    }
+    if (areaDescText) out.areaDesc = areaDescText;
+    return out;
+}
+
+/**
+ * Escala de Mercalli Modificada (MM) según severidad SASMEX.
+ * Referencia: escala oficial en México (I-XII). Menor = no ameritó (baja); Moderada = Leve-Moderado; Mayor = Fuerte-Muy fuerte.
+ * Fuente: Escala sismológica de Mercalli (Wikipedia), USGS, SGM México.
+ */
+const MERCALLI_POR_SEVERIDAD = {
+    menor: 'I-II',      // Muy débil a Débil - no ameritó alerta
+    moderada: 'III-IV', // Leve a Moderado - sentido por muchas personas
+    mayor: 'VI-VII'     // Fuerte a Muy fuerte - daños leves a moderados posibles
+};
+
+/** Emojis clasificados por intensidad SASMEX (MENOR → verde, MODERADA → amarillo, MAYOR → rojo). */
+const EMOJI_POR_INTENSIDAD = {
+    MENOR: '🟢',     // Baja intensidad
+    MODERADA: '🟡',  // Intensidad media
+    MAYOR: '🔴'      // Alta intensidad
+};
+
+// ═══════════════════════════════════════════════════════════════════════════
+// FÓRMULA DE MERCALLI CONECTADA AL RSS SASMEX (matemáticas en código)
+// ═══════════════════════════════════════════════════════════════════════════
+// Coeficientes de atenuación tipo Wald et al. para estimar MMI desde M y R:
+// MMI = a + b*M - c*log10(R). R en km, M magnitud. Ajustados para contexto México/CIRES.
+const MERCALLI_ATENUACION = {
+    a: 3.30,
+    b: 1.66,
+    c: 3.49
+};
+
+/** Convierte MMI numérico (1–12) a rango en Escala Mercalli Modificada (Romano). */
+function mmiARangoMercalli(mmi) {
+    const m = Math.max(1, Math.min(12, Number(mmi)));
+    if (m <= 2) return 'I-II';
+    if (m <= 4) return 'III-IV';
+    if (m <= 5) return 'V';
+    if (m <= 7) return 'VI-VII';
+    if (m <= 8) return 'VIII';
+    if (m <= 9) return 'IX';
+    if (m <= 10) return 'X';
+    if (m <= 11) return 'XI';
+    return 'XII';
+}
+
+/**
+ * Estima Intensidad Mercalli Modificada (MMI) con fórmula de atenuación cuando hay M y R.
+ * MMI = a + b*M - c*log10(max(R_km, 1)) — evita log(0).
+ * Si no hay magnitud/distancia, devuelve null para usar fallback por severidad.
+ */
+function calcularMMIDesdeMagnitudDistancia(magnitud, distanciaKm) {
+    if (magnitud == null || distanciaKm == null || Number.isNaN(magnitud) || Number.isNaN(distanciaKm)) return null;
+    const M = Number(magnitud);
+    const R = Math.max(1, Number(distanciaKm));
+    const { a, b, c } = MERCALLI_ATENUACION;
+    const mmi = a + b * M - c * Math.log10(R);
+    return Math.max(1, Math.min(12, mmi));
+}
+
+/**
+ * Extrae magnitud (Richter) y distancia (km) del texto del RSS SASMEX (description, headline, etc.).
+ * Acepta patrones: "Magnitud 4.2", "magnitud 4.5", "M 5.1", "a 80 km", "120 km", "distancia 85 km".
+ */
+function extraerMagnitudYDistancia(texto) {
+    if (!texto || typeof texto !== 'string') return { magnitud: null, distanciaKm: null };
+    const t = texto.trim();
+    let magnitud = null;
+    let distanciaKm = null;
+    const magMatch = t.match(/(?:magnitud|mag\.?|M\s*[=:]?)\s*([0-9]+[.,][0-9]+|[0-9]+)/i) || t.match(/\b([0-9]+[.,][0-9]+)\s*(?:richter|M\s*[wl]?)/i);
+    if (magMatch && magMatch[1]) {
+        const v = parseFloat(magMatch[1].replace(',', '.'));
+        if (!Number.isNaN(v) && v >= 0 && v <= 10) magnitud = v;
+    }
+    const distMatch = t.match(/(?:distancia|a\s+|a\s*)\s*([0-9]+)\s*km/i) || t.match(/\b([0-9]+)\s*km\b/i);
+    if (distMatch && distMatch[1]) {
+        const d = parseInt(distMatch[1], 10);
+        if (!Number.isNaN(d) && d >= 1 && d <= 2000) distanciaKm = d;
+    }
+    return { magnitud, distanciaKm };
+}
+
+/**
+ * Calcula la etiqueta de Escala Mercalli para el mensaje de alerta, conectada al RSS SASMEX.
+ * 1) Si el RSS aporta magnitud y distancia, usa fórmula de atenuación: MMI = a + b*M - c*log10(R).
+ * 2) Si no, usa severidad RSS (Menor/Moderada/Mayor) con MMI nominal para coincidir con alertas reales (ej. Menor → III-IV).
+ */
+function calcularMercalliDesdeRss(data) {
+    const raw = `${data.rawText || ''} ${data.evento || ''} ${data.rssTitle || ''}`;
+    const { magnitud, distanciaKm } = data.magnitud != null || data.distanciaKm != null
+        ? { magnitud: data.magnitud, distanciaKm: data.distanciaKm }
+        : extraerMagnitudYDistancia(raw);
+    const mmiCalculado = calcularMMIDesdeMagnitudDistancia(magnitud, distanciaKm);
+    if (mmiCalculado != null) return mmiARangoMercalli(mmiCalculado);
+    const sev = (data.severidad || '').toLowerCase();
+    const esMayor = sev.includes('mayor');
+    const esMenor = sev.includes('menor');
+    const MMI_NOMINAL_MENOR = 3.5;   // Alerta inicial MENOR → III-IV (como en ejemplo Petatlán)
+    const MMI_NOMINAL_MODERADA = 4;
+    const MMI_NOMINAL_MAYOR = 6.5;
+    const nominal = esMayor ? MMI_NOMINAL_MAYOR : (esMenor ? MMI_NOMINAL_MENOR : MMI_NOMINAL_MODERADA);
+    return mmiARangoMercalli(nominal);
+}
+
+/** Intensidad para "Sismo finalizado" según lo que diga el RSS (no asumir MODERADO). */
+function intensidadDesdeRss(rawLower) {
+    const r = (rawLower || '').toLowerCase();
+    if (/\b(mayor|fuerte|severe|extreme)\b/.test(r)) return 'MAYOR';
+    if (/\b(moderad|moderate)\b/.test(r)) return 'MODERADO';
+    if (/\b(menor|minor)\b/.test(r)) return 'MENOR';
+    return null;
+}
+
+/** Extrae solo el lugar del evento (ej. "Sismo Moderado en SanMarcos Gro" → "SanMarcos Gro"). */
+function extraerLugar(eventoOTitulo) {
+    const s = (eventoOTitulo || '').trim();
+    const match = s.match(/\bSismo\s+(?:Moderado|Menor|Mayor|Fuerte)?\s*en\s+(.+?)(?:\s*,\s*|$)/i) || s.match(/\ben\s+([A-Za-zÀ-ú0-9\s\-]+?)(?:\s*,\s*|\s*a\s+\d|\s*$)/i);
+    if (match && match[1]) return match[1].trim();
+    return s || 'N/A';
+}
+
+/** Arma el texto de alerta. Todo depende del RSS SASMEX en tiempo real (evento, severidad, intensidad, lugar, fecha). */
+function buildMensajeAlerta(data) {
+    const severidad = data.severidad || '';
+    const rawLower = (data.evento || '') + ' ' + (data.rawText || '');
+    const esMenor = severidad.toLowerCase().includes('menor');
+    const esMayor = severidad.toLowerCase().includes('mayor');
+    const esFinalizado = /\bfinalizad[oa]\b/i.test(rawLower);
+    // Lugar: preferir areaDesc del CAP (área afectada, ej. "Oaxaca"); epicentro = centro de esa área (centroide del polígono)
+    const lugar = (data.areaDesc && data.areaDesc.trim()) || extraerLugar(data.evento || data.rssTitle) || (data.evento || data.rssTitle || 'N/A').replace(/\s*\.?\s*$/, '').trim();
+    const tieneEpicentroCap = data.epicenterLat != null && data.epicenterLon != null;
+    const fechaHora = data.fechaCorta || data.fecha || 'N/A';
+    const intensidad = esMenor ? 'MENOR' : (esMayor ? 'MAYOR' : 'MODERADA');
+    const intensidadCorta = esMenor ? 'MENOR' : (esMayor ? 'MAYOR' : 'MODERADO');
+    const intensidadFinalizado = intensidadDesdeRss(rawLower) || intensidadCorta;
+
+    // #region agent log
+    fetch('http://127.0.0.1:7565/ingest/50056f85-2898-4e72-a92e-a3fed4d8a37d',{method:'POST',headers:{'Content-Type':'application/json','X-Debug-Session-Id':'cdc5a1'},body:JSON.stringify({sessionId:'cdc5a1',location:'index.js:buildMensajeAlerta',message:'buildMensajeAlerta decision',data:{severidad,esMenor,esMayor,esFinalizado},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
+
+    // Middleware de seguridad: solo usar mensaje de "Sismo finalizado"
+    // cuando el RSS indica explícitamente que el sismo está finalizado.
+    // El bot NO asume "NO AMERITÓ ALERTA SÍSMICA"; solo lo incluye si el RSS lo dice.
+    if (esFinalizado) {
+        const rssDiceNoAmerito = /\bno\s+amerit[oó]\s+(alerta\s+)?s[ií]smica\b/i.test(rawLower) ||
+            /\bno\s+amerito\b/i.test(rawLower) || /\bno\s+ameritó\b/i.test(rawLower);
+        const sufijo = rssDiceNoAmerito ? ', NO AMERITÓ ALERTA SÍSMICA.' : '.';
+        return `Sismo finalizado\n\nSe detectó un sismo de intensidad ${intensidadFinalizado} en ${lugar}${sufijo}`;
+    }
+
+    const emoji = EMOJI_POR_INTENSIDAD[intensidad] || EMOJI_POR_INTENSIDAD.MODERADA;
+    const mercalli = calcularMercalliDesdeRss(data);
+    const rssDiceNoAmerito = /\bno\s+amerit[oó]\s+(alerta\s+)?s[ií]smica\b/i.test(rawLower) ||
+        /\bno\s+amerito\b/i.test(rawLower) || /\bno\s+ameritó\b/i.test(rawLower);
+    const cierre = esMayor
+        ? 'Toma precauciones y sigue las indicaciones de Protección Civil.'
+        : esMenor
+            ? (rssDiceNoAmerito ? 'Es posible que no lo percibas. NO ameritó alerta sísmica (según SASMEX).' : 'Es posible que no lo percibas.')
+            : 'Es posible que no lo percibas.';
+
+    return `#TenemosSismo #SASMEX #EQW\n\n` +
+        `⚠️ *SISMO DETECTADO!* ⚠️\n\n` +
+        `*Datos del sismo:*\n` +
+        `• Intensidad inicial: ${intensidad} ${emoji}\n` +
+        `• Escala Mercalli: ${mercalli}\n` +
+        `• Lugar: ${lugar}\n` +
+        (tieneEpicentroCap ? `• Epicentro (centro del área afectada CAP): ${data.epicenterLat.toFixed(4)}, ${data.epicenterLon.toFixed(4)}\n` : '') +
+        `• Fecha y hora: ${fechaHora}\n\n` +
+        cierre;
+}
+
+/** Solo considerar alertas que vienen del RSS SASMEX (tienen identifier del feed) y que no sean solo mensajes de sismo finalizado. Evita alertas fantasma. */
+function esAlertaDesdeRss(data) {
+    if (!data || typeof data !== 'object') return false;
+    const tieneId = data.identifier || (data.evento && data.rssTitle);
+    if (!tieneId) return false;
+
+    const raw = `${data.evento || ''} ${data.rawText || ''} ${data.rssTitle || ''}`.toLowerCase();
+    const esFinalizado = /\bfinalizad[oa]\b/.test(raw);
+
+    // Middleware anti-falsos positivos:
+    // si el RSS solo habla de sismo finalizado y no de alerta sísmica, NO se considera alerta a difundir.
+    if (esFinalizado && !/\balerta\s+s[ií]smica\b/.test(raw)) {
+        return false;
+    }
+
+    return true;
+}
+
 function escapeHtml(text) {
     if (!text || typeof text !== 'string') return '';
     return text
@@ -700,204 +1224,13 @@ function escapeHtml(text) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
-//                    GENERACIÓN DE IMÁGENES
+//                    GENERACIÓN DE IMÁGENES (desactivada)
 // ═══════════════════════════════════════════════════════════════════════════
+// El bot ya no usa la tarjeta HTML ni screenshot; las alertas se envían solo por texto.
 
 async function generateAlertImage(alertData) {
-    let page = null;
-    
-    try {
-        console.log('📸 Generando imagen de alerta...');
-        
-        const browserInstance = await initImageBrowser();
-        page = await browserInstance.newPage();
-        page.setDefaultTimeout(CONFIG.pageTimeout);
-        
-        await page.setViewport({
-            width: 600,
-            height: 750,
-            deviceScaleFactor: 2
-        });
-        
-        const fecha = alertData?.fecha || 'Consultando...';
-        const evento = alertData?.evento || 'Sismo detectado';
-        const severidad = alertData?.severidad || 'Evaluando...';
-        
-        let severidadClass = 'moderada';
-        let severidadColor = '#ffa502';
-        const sevLower = severidad.toLowerCase();
-        
-        if (sevLower.includes('menor')) {
-            severidadClass = 'menor';
-            severidadColor = '#2ed573';
-        } else if (sevLower.includes('mayor') || sevLower.includes('fuerte')) {
-            severidadClass = 'mayor';
-            severidadColor = '#ff4757';
-        }
-        
-        const htmlContent = `
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <meta charset="UTF-8">
-            <style>
-                @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
-                
-                * { margin: 0; padding: 0; box-sizing: border-box; }
-                
-                body {
-                    font-family: 'Inter', 'Segoe UI', sans-serif;
-                    background: white;
-                    min-height: 100vh;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    padding: 20px;
-                }
-                
-                .card {
-                    background: white;
-                    border-radius: 24px;
-                    padding: 35px;
-                    width: 100%;
-                    max-width: 540px;
-                    border: 3px solid #ff4757;
-                    box-shadow: 0 10px 40px rgba(255, 71, 87, 0.15);
-                }
-                
-                .header { text-align: center; margin-bottom: 30px; }
-                .alert-icons { font-size: 40px; margin-bottom: 15px; letter-spacing: 5px; }
-                .title { color: #ff4757; font-size: 32px; font-weight: 800; text-transform: uppercase; letter-spacing: 4px; }
-                .subtitle { color: #666; font-size: 14px; margin-top: 8px; letter-spacing: 2px; text-transform: uppercase; }
-                .divider { height: 3px; background: linear-gradient(90deg, transparent, ${severidadColor}, transparent); margin: 25px 0; }
-                
-                .info-row {
-                    display: flex;
-                    align-items: flex-start;
-                    margin: 18px 0;
-                    padding: 18px;
-                    background: #f8f9fa;
-                    border-radius: 16px;
-                    border-left: 4px solid ${severidadColor};
-                }
-                
-                .info-icon { font-size: 28px; margin-right: 18px; min-width: 40px; }
-                .info-content { flex: 1; }
-                .info-label { color: #666; font-size: 12px; text-transform: uppercase; letter-spacing: 2px; margin-bottom: 6px; font-weight: 600; }
-                .info-value { color: #000; font-size: 15px; font-weight: 500; line-height: 1.5; word-break: break-word; }
-                
-                .severity-badge {
-                    display: inline-block;
-                    padding: 10px 24px;
-                    border-radius: 30px;
-                    font-weight: 700;
-                    font-size: 14px;
-                    text-transform: uppercase;
-                    letter-spacing: 2px;
-                }
-                
-                .severity-badge.menor { background: #2ed573; color: #fff; }
-                .severity-badge.moderada { background: #ffa502; color: #000; }
-                .severity-badge.mayor { background: #ff4757; color: #fff; animation: pulse 1s infinite; }
-                
-                @keyframes pulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.05); } }
-                
-                .emergency-box {
-                    background: #ffeaea;
-                    border: 2px solid #ff4757;
-                    border-radius: 16px;
-                    padding: 20px;
-                    margin-top: 25px;
-                    text-align: center;
-                }
-                
-                .emergency-label { color: #ff4757; font-size: 12px; text-transform: uppercase; letter-spacing: 3px; margin-bottom: 8px; font-weight: 600; }
-                .emergency-number { color: #000; font-size: 42px; font-weight: 800; letter-spacing: 3px; }
-                
-                .footer { margin-top: 25px; text-align: center; padding-top: 20px; border-top: 1px solid #ddd; }
-                .footer-text { color: #666; font-size: 12px; letter-spacing: 1px; line-height: 1.6; }
-                .footer-brand { color: #ff4757; font-weight: 700; font-size: 14px; margin-top: 12px; letter-spacing: 2px; }
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <div class="header">
-                    <div class="alert-icons">🚨🚨🚨</div>
-                    <div class="title">Alerta</div>
-                </div>
-                
-                <div class="divider"></div>
-                
-                <div class="info-row">
-                    <span class="info-icon">📅</span>
-                    <div class="info-content">
-                        <div class="info-label">Fecha y Hora</div>
-                        <div class="info-value">${escapeHtml(fecha)}</div>
-                    </div>
-                </div>
-                
-                <div class="info-row">
-                    <span class="info-icon">🌋</span>
-                    <div class="info-content">
-                        <div class="info-label">Evento Detectado</div>
-                        <div class="info-value">${escapeHtml(evento)}</div>
-                    </div>
-                </div>
-                
-                <div class="info-row">
-                    <span class="info-icon">⚠️</span>
-                    <div class="info-content">
-                        <div class="info-label">Nivel de Severidad</div>
-                        <div class="info-value">
-                            <span class="severity-badge ${severidadClass}">
-                                ${escapeHtml(severidad.replace('Severidad:', '').trim()) || 'Evaluando'}
-                            </span>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="emergency-box">
-                    <div class="emergency-label">📞 Línea de Emergencias</div>
-                    <div class="emergency-number">911</div>
-                </div>
-                
-                <div class="footer">
-                    <div class="footer-text">Mantén la calma • Aléjate de ventanas • Ubícate en zona segura</div>
-                    <div class="footer-brand">🏛️ SASMEX • CIRES</div>
-                </div>
-            </div>
-        </body>
-        </html>
-        `;
-        
-        await page.setContent(htmlContent, {
-            waitUntil: 'networkidle0',
-            timeout: CONFIG.pageTimeout
-        });
-        
-        await sleep(500);
-        
-        if (fs.existsSync(CONFIG.screenshotFile)) {
-            fs.unlinkSync(CONFIG.screenshotFile);
-        }
-        
-        await page.screenshot({
-            path: CONFIG.screenshotFile,
-            type: 'png',
-            omitBackground: false
-        });
-        
-        console.log('✅ Imagen generada');
-        return { success: true, imagePath: CONFIG.screenshotFile };
-        
-    } catch (error) {
-        console.error('❌ Error generando imagen:', error.message);
-        return { success: false, error: error.message };
-    } finally {
-        if (page) {
-            try { await page.close(); } catch (e) {}
-        }
-    }
+    console.log('📸 Generación de imagen desactivada (alertas solo texto).');
+    return { success: false, error: 'Desactivado' };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
@@ -907,10 +1240,8 @@ async function generateAlertImage(alertData) {
 class SasmexWhatsAppBot {
     constructor() {
         console.log('🤖 Inicializando Bot SASMEX WhatsApp...');
-        console.log(`   Ambiente: ${IS_HEROKU ? '🟢 HEROKU' : '🔵 LOCAL'}`);
-        logToFile('INFO', `Bot inicializado - Ambiente: ${IS_HEROKU ? 'HEROKU' : 'LOCAL'}`);
+        logToFile('INFO', 'Bot inicializado');
         
-        // Configuración de Puppeteer para Heroku
         const puppeteerConfig = {
             headless: true,
             args: [
@@ -922,9 +1253,6 @@ class SasmexWhatsAppBot {
                 '--disable-gpu'
             ]
         };
-        
-        // En Heroku, leer el path de Chrome desde la variable de entorno
-        // que se configura con: heroku config:set PUPPETEER_EXECUTABLE_PATH=/app/.chrome-for-testing/chrome-linux64/chrome
         if (process.env.PUPPETEER_EXECUTABLE_PATH) {
             puppeteerConfig.executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
         }
@@ -936,7 +1264,7 @@ class SasmexWhatsAppBot {
             }),
             puppeteer: puppeteerConfig,
             restartOnAuthFail: true,
-            qrMaxWaitTime: 60000  // QR timeout en 60s para Heroku (menos memoria)
+            qrMaxWaitTime: 60000
         });
         
         this.subscribers = [];
@@ -960,6 +1288,11 @@ class SasmexWhatsAppBot {
         this.isRecovering = false;
         this.recoveryAttempts = 0;
         this.maxRecoveryAttempts = 10;
+        
+        // 🚀 Rate limiter (innovación): evita spam de comandos
+        this.rateLimitMap = new Map();
+        this.rateLimitMax = CONFIG.rateLimitMax || 25;
+        this.rateLimitWindowMs = CONFIG.rateLimitWindowMs || 60000;
         
         this.setupEvents();
         this.setupAutoRepair();
@@ -1197,15 +1530,6 @@ class SasmexWhatsAppBot {
             this.isReady = true;
             this.subscribers = getSubscribers();
             console.log(`👥 Suscriptores cargados: ${this.subscribers.length}`);
-            
-            // Liberar memoria en Heroku después de conectar
-            if (IS_HEROKU) {
-                try {
-                    if (global.gc) global.gc();
-                    console.log('🧹 Memoria liberada');
-                } catch (e) {}
-            }
-            
             this.startMonitoring();
         });
         
@@ -1276,6 +1600,23 @@ class SasmexWhatsAppBot {
             
             // Validación de comando
             if (!command || command.length === 0) {
+                return;
+            }
+            
+            // 🚀 Rate limiting: máximo N comandos por ventana de tiempo por chat
+            const now = Date.now();
+            let bucket = this.rateLimitMap.get(chatId);
+            if (!bucket) {
+                bucket = { count: 0, resetAt: now + this.rateLimitWindowMs };
+                this.rateLimitMap.set(chatId, bucket);
+            }
+            if (now >= bucket.resetAt) {
+                bucket.count = 0;
+                bucket.resetAt = now + this.rateLimitWindowMs;
+            }
+            bucket.count++;
+            if (bucket.count > this.rateLimitMax) {
+                await this.sendMessage(chatId, `⏳ *Demasiados comandos.* Espera ${Math.ceil((bucket.resetAt - now) / 1000)}s antes de enviar más.`);
                 return;
             }
             
@@ -1434,12 +1775,57 @@ class SasmexWhatsAppBot {
                     await this.cmdSimulacro(msg, args);
                     break;
                     
+                case 'tiempo':
+                case 'uptime':
+                    await this.cmdTiempo(msg);
+                    break;
+                    
+                case 'sismo':
+                case 'hubo':
+                    await this.cmdSismo(msg);
+                    break;
+                    
+                case 'historial':
+                case 'alertas':
+                    await this.cmdHistorial(msg, args);
+                    break;
+                    
+                case 'version':
+                case 'v':
+                    await this.cmdVersion(msg);
+                    break;
+                    
+                case 'invitar':
+                case 'grupo':
+                case 'link':
+                    await this.cmdInvitar(msg);
+                    break;
+                    
+                case 'recordar':
+                case 'reminder':
+                case 'recordatorio':
+                    await this.cmdRecordar(msg, args);
+                    break;
+                    
+                case 'texto':
+                case 'solo_texto':
+                case 'imagen':
+                    await this.cmdModoTexto(msg, args, isGroup);
+                    break;
+                    
                 default:
                     await this.sendMessage(chatId, 
                         `❓ Comando desconocido: *${command}*\n\n` +
                         `Escribe *${CONFIG.prefix}menu* para ver los comandos disponibles.`
                     );
             }
+            
+            // 🚀 Reacción de confirmación (innovación): el bot reacciona al mensaje
+            try {
+                if (msg.id && typeof msg.react === 'function') {
+                    await msg.react('✅');
+                }
+            } catch (e) { /* ignorar si no soporta reacciones */ }
             
         } catch (error) {
             console.error('❌ Error procesando mensaje:', error.message);
@@ -1621,8 +2007,11 @@ Puedes cambiar tu nivel con: ${CONFIG.prefix}severidad [nivel]
 ┌─ 🚨 ALERTAS Y ESTADO ─────────────────────────────────────────┐
 │                                                                 │
 │  ${CONFIG.prefix}alerta              ├─ 📡 Ver última alerta con detalles    │
-│  ${CONFIG.prefix}test                ├─ ✔️  Probar el sistema                │
-│  ${CONFIG.prefix}estado              ├─ 📊 Estado del bot                    │
+│  ${CONFIG.prefix}sismo / ${CONFIG.prefix}hubo     ├─ ⚡ ¿Hubo sismo? (respuesta rápida)     │
+│  ${CONFIG.prefix}historial [n]       ├─ 📋 Historial de alertas (últimas n)   │
+│  ${CONFIG.prefix}test                 ├─ ✔️  Probar el sistema                │
+│  ${CONFIG.prefix}estado               ├─ 📊 Estado del bot                    │
+│  ${CONFIG.prefix}tiempo               ├─ ⏱️  Uptime y próxima verificación    │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 
@@ -1630,10 +2019,16 @@ Puedes cambiar tu nivel con: ${CONFIG.prefix}severidad [nivel]
 │                                                                 │
 │  ${CONFIG.prefix}config              ├─ 🔧 Ver tu configuración              │
 │  ${CONFIG.prefix}severidad [nivel]   ├─ 🎯 Cambiar filtro de severidad      │
-│                                  ├─ Niveles: all/menor/moderada/mayor
+│  ${CONFIG.prefix}texto on/off        ├─ 📝 Modo solo texto (sin imagen)     │
 │  ${CONFIG.prefix}silenciar           ├─ 🔇 Pausar alertas                    │
 │  ${CONFIG.prefix}activar_alertas     ├─ 🔔 Reanudar alertas                  │
 │                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─ 🚀 INNOVACIONES ─────────────────────────────────────────────┐
+│  ${CONFIG.prefix}version              ├─ 📌 Ver versión del bot               │
+│  ${CONFIG.prefix}invitar              ├─ 📱 Cómo agregar el bot a un grupo   │
+│  ${CONFIG.prefix}recordar [tiempo] [msg] ├─ ⏰ Recordatorio (ej: 30 o 2h)      │
 └─────────────────────────────────────────────────────────────────┘
 
 ┌─ 🔧 ADMINISTRACIÓN ───────────────────────────────────────────┐
@@ -1720,82 +2115,14 @@ ${isOwner ? `
     async cmdAlerta(msg) {
         const chatId = msg.from;
         
-        await this.sendMessage(chatId, '📸 *Consultando SASMEX...*');
-        
         try {
             const webData = await getWebContent();
             
-            if (webData.success) {
-                const imageResult = await generateAlertImage(webData.data);
-                
-                // Determinar color y emoji según severidad
-                let emoji = '🟡';
-                let recomendaciones = '';
-                const sevLower = webData.data.severidad.toLowerCase();
-                
-                if (sevLower.includes('menor')) {
-                    emoji = '🟢';
-                    recomendaciones = '✓ Alerta preventiva\n✓ Manténte informado\n✓ Ten a mano tus artículos de emergencia';
-                } else if (sevLower.includes('mayor')) {
-                    emoji = '🔴';
-                    recomendaciones = '⚠️ TOMA ACCIONES INMEDIATAS\n⚠️ Evacúa a zona segura\n⚠️ Alerta a familiares y amigos';
-                } else {
-                    recomendaciones = '⚡ Aléjate de ventanas\n⚡ Protégete bajo mesa o mueble sólido\n⚡ Aleja de objetos que puedan caer';
-                }
-                
-                if (imageResult.success && fs.existsSync(imageResult.imagePath)) {
-                    await this.sendImage(chatId, imageResult.imagePath,
-                        `${emoji} *ÚLTIMA ALERTA SÍSMICA SASMEX*\n\n` +
-                        '📞 Emergencias: *911*\n' +
-                        '🔗 rss.sasmex.net'
-                    );
-                }
-                
-                // Enviar información detallada
-                const infoDetallada = `
-${emoji} *INFORMACIÓN DETALLADA DE LA ALERTA*
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📅 *Fecha y Hora:*
-${webData.data.fecha}
-
-🌋 *Evento Detectado:*
-${webData.data.evento}
-
-⚠️ *Nivel de Severidad:*
-${webData.data.severidad}
-
-🛰️ *Fuente Oficial:*
-Sistema de Alerta Sísmica Mexicano (SASMEX)
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📋 *RECOMENDACIONES INMEDIATAS:*
-
-${recomendaciones}
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-📱 *PRÓXIMOS PASOS:*
-1️⃣ Mantén la calma
-2️⃣ Protégete de inmediato
-3️⃣ Ayuda a personas cercanas
-4️⃣ Reporta daños a autoridades
-5️⃣ Síguenos para actualizaciones
-
-📞 *NÚMEROS DE EMERGENCIA:*
-🚨 911 - Policía, Ambulancia, Bomberos
-🚑 Línea de Emergencias Local
-🏥 Hospital más cercano
-
-🌐 *INFORMACIÓN OFICIAL:*
-https://www.cenapred.unam.mx
-https://www.ssn.unam.mx
-                `;
-                
-                await this.sendMessage(chatId, infoDetallada);
+            if (webData.success && webData.data) {
+                const mensaje = buildMensajeAlerta(webData.data);
+                await this.sendMessage(chatId, mensaje);
             } else {
-                await this.sendMessage(chatId, `❌ Error: ${webData.error || 'No se pudo conectar'}`);
+                await this.sendMessage(chatId, `❌ Error: ${webData?.error || 'No se pudo conectar'}`);
             }
         } catch (error) {
             await this.sendMessage(chatId, '❌ Error procesando solicitud.');
@@ -2080,15 +2407,6 @@ El Sistema de Alerta Sísmica Mexicano (SASMEX) es un sistema automático que de
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-🌐 *SITIOS OFICIALES:*
-
-📍 SASMEX: https://www.sasmex.net
-📍 CENAPRED: https://www.cenapred.unam.mx
-📍 CIRES: https://www.cires.org.mx
-📍 SSN UNAM: https://www.ssn.unam.mx
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 ⚠️ *ESCALA DE SEVERIDAD:*
 
 🟢 *MENOR (Green)*
@@ -2185,6 +2503,7 @@ ${CONFIG.prefix}estado - Estado del bot
         
         const status = config.subscribed ? '✅ Suscrito' : '❌ No suscrito';
         const severity = config.severity === 'all' ? 'Todas' : config.severity;
+        const modoAlerta = config.soloTexto ? 'Solo texto (sin imagen)' : 'Con imagen';
         const muted = config.muted ? '🔇 Silenciado' : '🔔 Activo';
         const joinedAt = config.joinedAt ? new Date(config.joinedAt).toLocaleString('es-MX', { timeZone: 'America/Mexico_City' }) : 'Desconocido';
         
@@ -2221,6 +2540,9 @@ ${config.severity === 'all' ? '✓ Alertas Menor, Moderada y Mayor' : config.sev
 Modo: ${muted}
 
 ${muted === '🔔 Activo' ? 'Recibirás todas las notificaciones según tu filtro de severidad' : 'Las notificaciones están pausadas temporalmente'}
+
+📱 *MODO DE ALERTA:* ${modoAlerta}
+   Cambiar: ${CONFIG.prefix}texto on | ${CONFIG.prefix}texto off
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -2322,6 +2644,138 @@ ${CONFIG.prefix}alerta - Ver última alerta
         } else {
             await this.sendMessage(chatId, '❌ Error reactivando alertas.');
         }
+    }
+    
+    // ═══════════════════════════════════════════════════════════════════════
+    //              🚀 COMANDOS INNOVADORES (nuevos)
+    // ═══════════════════════════════════════════════════════════════════════
+    
+    async cmdTiempo(msg) {
+        const chatId = msg.from;
+        const uptime = this.getUptime();
+        const nextCheck = this.lastCheck
+            ? `Próxima verificación en ~${CONFIG.checkInterval - Math.floor((Date.now() - this.lastCheck.getTime()) / 1000) % CONFIG.checkInterval}s`
+            : 'En la siguiente ronda';
+        const msgText = `⏱️ *TIEMPO Y ESTADO*\n\n` +
+            `🟢 Uptime: *${uptime}*\n` +
+            `📡 Última verificación SASMEX: ${this.lastCheck ? this.lastCheck.toLocaleTimeString('es-MX', { timeZone: 'America/Mexico_City' }) : 'Pendiente'}\n` +
+            `🔄 ${nextCheck}\n\n` +
+            `_Bot operativo 24/7_`;
+        await this.sendMessage(chatId, msgText);
+    }
+    
+    async cmdSismo(msg) {
+        const chatId = msg.from;
+        const webData = await getWebContent();
+        if (!webData.success) {
+            await this.sendMessage(chatId, '❓ No se pudo consultar SASMEX. Intenta más tarde.');
+            return;
+        }
+        const d = webData.data;
+        const sev = (d.severidad || '').toLowerCase();
+        const intensidadKey = sev.includes('mayor') ? 'MAYOR' : (sev.includes('menor') ? 'MENOR' : 'MODERADA');
+        const emoji = EMOJI_POR_INTENSIDAD[intensidadKey] || EMOJI_POR_INTENSIDAD.MODERADA;
+        const oneLiner = `${emoji} *¿Hubo sismo?*\n\n` +
+            `Última alerta: ${d.fecha || 'N/A'}\n` +
+            `${d.evento || 'Alerta sísmica'} — ${d.severidad || 'Moderada'}\n\n` +
+            `Más detalles: ${CONFIG.prefix}alerta`;
+        await this.sendMessage(chatId, oneLiner);
+    }
+    
+    async cmdHistorial(msg, args) {
+        const chatId = msg.from;
+        const limit = Math.min(parseInt(args[0], 10) || 5, 15);
+        const history = getAlertHistory();
+        if (!history.length) {
+            await this.sendMessage(chatId, '📋 No hay historial de alertas registrado aún.');
+            return;
+        }
+        const slice = history.slice(0, limit);
+        let text = `📋 *HISTORIAL DE ALERTAS* (últimas ${slice.length})\n\n`;
+        slice.forEach((a, i) => {
+            text += `${i + 1}. ${a.fecha || 'N/A'} — ${a.severidad || '?'}\n   ${(a.evento || '').substring(0, 50)}${(a.evento || '').length > 50 ? '…' : ''}\n`;
+        });
+        text += `\n_Usa ${CONFIG.prefix}alerta para ver la última con detalle._`;
+        await this.sendMessage(chatId, text);
+    }
+    
+    async cmdVersion(msg) {
+        const chatId = msg.from;
+        const v = CONFIG.version || '2.0.0';
+        const msgText = `🌋 *BOT SASMEX WHATSAPP*\n\n` +
+            `Versión: *${v}*\n` +
+            `Node: ${process.version}\n` +
+            `Ambiente: Local\n\n` +
+            `✨ Novedades: rate limit, typing, historial, recordatorios, modo solo texto, !sismo, !tiempo, !invitar`;
+        await this.sendMessage(chatId, msgText);
+    }
+    
+    async cmdInvitar(msg) {
+        const chatId = msg.from;
+        const text = `📱 *AGREGAR EL BOT A UN GRUPO*\n\n` +
+            `1️⃣ Abre el grupo en WhatsApp\n` +
+            `2️⃣ Menú (⋮) → *Añadir participantes*\n` +
+            `3️⃣ Busca este número (el del bot) y agrégalo\n` +
+            `4️⃣ En el grupo escribe *${CONFIG.prefix}start* para activar alertas\n\n` +
+            `_El bot enviará alertas sísmicas a todo el grupo._`;
+        await this.sendMessage(chatId, text);
+    }
+    
+    async cmdRecordar(msg, args) {
+        const chatId = msg.from;
+        const isGroup = String(chatId).endsWith('@g.us');
+        if (isGroup) {
+            await this.sendMessage(chatId, '⏰ Los recordatorios solo están disponibles en chats privados.');
+            return;
+        }
+        const timeStr = args[0];
+        const texto = args.slice(1).join(' ') || 'Recordatorio';
+        if (!timeStr) {
+            await this.sendMessage(chatId,
+                `⏰ *Recordatorios*\n\n` +
+                `Uso: ${CONFIG.prefix}recordar [tiempo] [mensaje]\n` +
+                `Ejemplos:\n` +
+                `• ${CONFIG.prefix}recordar 30 Revisar SASMEX\n` +
+                `• ${CONFIG.prefix}recordar 2h Llamar a familia\n` +
+                `• ${CONFIG.prefix}recordar 90 Simulacro en 90 min\n\n` +
+                `Tiempo: minutos (número) o Xh para horas. Máx 24h.`
+            );
+            return;
+        }
+        let ms = 0;
+        const num = parseFloat(timeStr.replace(/h$/i, ''));
+        if (/h$/i.test(timeStr)) ms = num * 60 * 60 * 1000;
+        else ms = num * 60 * 1000;
+        if (ms < 60000 || ms > 24 * 60 * 60 * 1000) {
+            await this.sendMessage(chatId, '❌ Tiempo inválido. Usa entre 1 min y 24h (ej: 30 o 2h).');
+            return;
+        }
+        const id = addRecordatorio(chatId, texto, ms);
+        const mins = Math.round(ms / 60000);
+        await this.sendMessage(chatId, `✅ *Recordatorio programado* en ${mins} min.\n\nTe enviaré: "${texto}"\n\n_ID: ${id}_`);
+    }
+    
+    async cmdModoTexto(msg, args, isGroup) {
+        const chatId = msg.from;
+        const op = (args[0] || '').toLowerCase();
+        if (op === 'on' || op === '1' || op === 'si' || op === 'sí') {
+            setUserSoloTexto(chatId, true, isGroup);
+            await this.sendMessage(chatId, '📝 *Modo solo texto activado.* Las alertas llegarán sin imagen (ahorro de datos).');
+            return;
+        }
+        if (op === 'off' || op === '0' || op === 'no') {
+            setUserSoloTexto(chatId, false, isGroup);
+            await this.sendMessage(chatId, '🖼️ *Modo con imagen activado.* Recibirás alertas con imagen.');
+            return;
+        }
+        const config = getUserConfig(chatId);
+        const estado = config.soloTexto ? 'Solo texto (sin imagen)' : 'Con imagen';
+        await this.sendMessage(chatId,
+            `📱 *Modo de alertas:* ${estado}\n\n` +
+            `Para cambiar:\n` +
+            `• ${CONFIG.prefix}texto on  — solo texto\n` +
+            `• ${CONFIG.prefix}texto off — con imagen`
+        );
     }
     
     // ═══════════════════════════════════════════════════════════════════════
@@ -2924,7 +3378,6 @@ ${extraArgs.join(' ') || 'El Sistema de Alerta Sísmica Mexicano opera normalmen
 📅 *Fecha:* ${fecha}
 🏛️ *Emisor:* SASMEX - Centro de Información
 📞 *Contacto:* 911
-🌐 *Web:* https://rss.sasmex.net
 
 ╔════════════════════════════════════════════════════════════════╗
 ║           SASMEX: Vigilando por su seguridad 24/7.             ║
@@ -4490,6 +4943,17 @@ Escribe el comando completo para más información.
                 return null;
             }
 
+            // 🚀 Indicador "escribiendo..." (innovación) para mejor UX
+            try {
+                if (textStr.length > 80) {
+                    const chat = await this.client.getChatById(chatIdStr);
+                    if (chat && typeof chat.sendStateTyping === 'function') {
+                        await chat.sendStateTyping();
+                        await sleep(350);
+                    }
+                }
+            } catch (e) { /* ignorar si no soporta typing */ }
+
             // Enviar mensaje con validación
             try {
                 const result = await this.client.sendMessage(chatIdStr, textStr);
@@ -4722,6 +5186,9 @@ Escribe el comando completo para más información.
             } catch (fetchError) {
                 console.error('❌ Error fetching SASMEX:', fetchError.message);
                 this.errorCount++;
+                datadogGauge('sasmex.rss.ok', 0);
+                datadogIncrement('sasmex.errors', ['tipo:fetch']);
+                datadogEvent('SASMEX Bot: Error RSS', fetchError.message, 'error');
                 logToFile('ERROR', `SASMEX fetch error: ${fetchError.message}`);
                 return;
             }
@@ -4729,6 +5196,14 @@ Escribe el comando completo para más información.
             if (!webData || !webData.success) {
                 console.log('⚠️ No se pudo conectar:', webData?.error || 'Error desconocido');
                 this.errorCount++;
+                datadogGauge('sasmex.rss.ok', 0);
+                datadogIncrement('sasmex.errors', ['tipo:rss_sin_datos']);
+                datadogEvent('SASMEX Bot: RSS sin datos', webData?.error || 'Error desconocido', 'error');
+                return;
+            }
+
+            if (webData.cached) {
+                console.log('⚠️ Sin broadcast: solo se difunden alertas con RSS en tiempo real');
                 return;
             }
 
@@ -4737,6 +5212,8 @@ Escribe el comando completo para más información.
                 this.errorCount = 0;
                 console.log('✅ Conexión restaurada');
             }
+            datadogGauge('sasmex.rss.ok', 1);
+            datadogGauge('sasmex.bot.last_check_ok', Math.floor(Date.now() / 1000));
             
             const currentContent = webData.data?.identifier;
             const lastContent = getLastContent();
@@ -4748,37 +5225,24 @@ Escribe el comando completo para más información.
                 return;
             }
             
-            if (currentContent && currentContent !== lastContent) {
-                console.log('🚨 ¡NUEVA ALERTA DETECTADA!');
+            if (currentContent && currentContent !== lastContent && esAlertaDesdeRss(webData.data)) {
+                console.log('🚨 ¡NUEVA ALERTA DETECTADA! (RSS SASMEX)');
                 logToFile('ALERT', `Nueva alerta: ${currentContent}`);
+                datadogIncrement('sasmex.alerts.received', ['severity:' + (webData.data.severidad || 'unknown')]);
+                datadogEvent(
+                    'SASMEX: Alerta sísmica',
+                    `Severidad: ${webData.data.severidad || 'N/A'}\nIdentificador: ${currentContent || 'N/A'}`,
+                    'warning'
+                );
+                pushAlertToHistory(webData.data);
                 
                 try {
-                    const imageResult = await generateAlertImage(webData.data);
-                    
-                    if (imageResult.success && fs.existsSync(imageResult.imagePath)) {
-                        await this.broadcastImage(imageResult.imagePath,
-                            '🚨🚨🚨 *ALERTA SÍSMICA SASMEX* 🚨🚨🚨\n\n' +
-                            '⚠️ Nueva alerta detectada\n\n' +
-                            '📞 Emergencias: *911*\n' +
-                            '🏛️ Fuente: SASMEX - CIRES',
-                            webData.data.severidad
-                        );
-                    } else {
-                        // Fallback a texto si no hay imagen
-                        console.log('⚠️ No se pudo generar imagen, enviando texto...');
-                        await this.broadcastMessage(
-                            '🚨🚨🚨 *ALERTA SÍSMICA SASMEX* 🚨🚨🚨\n\n' +
-                            `📅 ${webData.data.fecha || 'N/A'}\n` +
-                            `🌋 ${webData.data.evento || 'N/A'}\n` +
-                            `⚠️ ${webData.data.severidad || 'Moderada'}\n\n` +
-                            '📞 Emergencias: *911*',
-                            webData.data.severidad
-                        );
-                    }
+                    const mensaje = buildMensajeAlerta(webData.data);
+                    await this.broadcastMessage(mensaje, webData.data.severidad);
                 } catch (alertError) {
                     console.error('❌ Error procesando alerta:', alertError.message);
+                    datadogEvent('SASMEX Bot: Error procesando alerta', alertError.message, 'error');
                     logToFile('ERROR', `Alert processing error: ${alertError.message}`);
-                    // Intentar enviar solo texto como último recurso
                     try {
                         await this.broadcastMessage(
                             '🚨 *ALERTA SÍSMICA DETECTADA*\n\n' +
@@ -4798,6 +5262,8 @@ Escribe el comando completo para más información.
         } catch (error) {
             console.error('❌ Error crítico:', error.message);
             this.errorCount++;
+            datadogIncrement('sasmex.errors', ['tipo:critico']);
+            datadogEvent('SASMEX Bot: Error crítico', error.message, 'error');
             logToFile('ERROR', `Critical error in checkForAlerts: ${error.message}`);
             
             // Llamar a handleCriticalError para activar auto-reparación si es necesario
@@ -4818,18 +5284,24 @@ Escribe el comando completo para más información.
             return;
         }
         
-        console.log(`📢 Enviando imagen a ${subs.length} suscriptor(es)...`);
+        console.log(`📢 Enviando imagen/texto a ${subs.length} suscriptor(es)...`);
         
         let enviados = 0, fallidos = 0;
         
         for (const chatId of subs) {
-            const result = await this.sendImage(chatId, imagePath, caption);
+            const config = getUserConfig(chatId);
+            let result;
+            if (config.soloTexto) {
+                result = await this.sendMessage(chatId, caption);
+            } else {
+                result = await this.sendImage(chatId, imagePath, caption);
+            }
             if (result) enviados++; else fallidos++;
             await sleep(500); // Evitar rate limiting de WhatsApp
         }
         
         console.log(`✅ Enviados: ${enviados} | ❌ Fallidos: ${fallidos}`);
-        logToFile('BROADCAST', `Imagen enviada: ${enviados} ok, ${fallidos} fail`);
+        logToFile('BROADCAST', `Imagen/texto enviada: ${enviados} ok, ${fallidos} fail`);
     }
     
     async broadcastMessage(message, alertSeverity = 'moderada') {
@@ -4857,15 +5329,6 @@ Escribe el comando completo para más información.
     
     startMonitoring() {
         try {
-            // Inicializar navegador para imágenes con protección
-            safeExecuteAsync(
-                async () => await initImageBrowser(),
-                null,
-                'Error inicializando navegador'
-            ).catch(err => {
-                console.error('⚠️ Error browser:', err.message);
-            });
-            
             // Primera verificación con protección
             setTimeout(() => {
                 safeExecuteAsync(
@@ -4884,6 +5347,21 @@ Escribe el comando completo para más información.
                 );
             }, CONFIG.checkInterval * 1000);
             
+            // 🚀 Checker de recordatorios (innovación): cada 30s revisa y envía
+            this.recordatoriosIntervalId = setInterval(() => {
+                if (!this.isReady || !this.client) return;
+                const data = loadData();
+                const list = data.recordatorios || [];
+                const now = Date.now();
+                const pending = list.filter(r => r.at <= now);
+                if (pending.length === 0) return;
+                data.recordatorios = list.filter(r => r.at > now);
+                saveData(data);
+                pending.forEach(r => {
+                    this.sendMessage(r.chatId, `⏰ *Recordatorio:* ${r.texto}`).catch(() => {});
+                });
+            }, 30000);
+            
             console.log(`
 ╔════════════════════════════════════════════════════════════════╗
 ║       🌋 BOT SASMEX WHATSAPP INICIADO 🌋                       ║
@@ -4895,6 +5373,15 @@ Escribe el comando completo para más información.
 ║   📝 Prefijo: ${CONFIG.prefix}                                              ║
 ╚════════════════════════════════════════════════════════════════╝
             `);
+            // Datadog: bot up + suscriptores; heartbeat cada 60s
+            datadogGauge('sasmex.bot.up', 1);
+            datadogGauge('sasmex.bot.subscribers', this.subscribers.length);
+            if (this.datadogHeartbeatId) clearInterval(this.datadogHeartbeatId);
+            this.datadogHeartbeatId = setInterval(() => {
+                datadogGauge('sasmex.bot.up', 1);
+                datadogGauge('sasmex.bot.uptime_seconds', Math.floor((Date.now() - this.startTime.getTime()) / 1000));
+                datadogGauge('sasmex.bot.subscribers', this.subscribers.length);
+            }, 60000);
         } catch (error) {
             console.error('❌ Error iniciando monitoreo:', error.message);
             logToFile('ERROR', `startMonitoring: ${error.message}`);
@@ -4934,9 +5421,19 @@ Escribe el comando completo para más información.
             console.log('✅ Auto-reparación detenida');
         }
         
+        if (this.datadogHeartbeatId) {
+            clearInterval(this.datadogHeartbeatId);
+            this.datadogHeartbeatId = null;
+            datadogGauge('sasmex.bot.up', 0);
+            datadogFlush();
+        }
         if (this.checkIntervalId) {
             clearInterval(this.checkIntervalId);
             console.log('✅ Monitoreo detenido');
+        }
+        if (this.recordatoriosIntervalId) {
+            clearInterval(this.recordatoriosIntervalId);
+            console.log('✅ Recordatorios detenidos');
         }
         
         try {
@@ -4981,16 +5478,14 @@ process.on('uncaughtException', (err) => {
     console.error('❌ ERROR CRÍTICO NO CAPTURADO:', err.message);
     console.error('Stack:', err.stack);
     logToFile('CRITICAL', `Uncaught Exception: ${err.message}\n${err.stack}`);
-    
-    // NO DETENER EL BOT - Solo registrar
+    datadogEvent('SASMEX Bot: Excepción no capturada', `${err.message}\n${(err.stack || '').slice(0, 500)}`, 'error');
     console.log('🛡️ Bot continúa ejecutándose...');
 });
 
 process.on('unhandledRejection', (reason, promise) => {
     console.error('❌ PROMESA RECHAZADA NO MANEJADA:', reason);
     logToFile('CRITICAL', `Unhandled Rejection: ${reason}\nPromise: ${util.inspect(promise)}`);
-    
-    // NO DETENER EL BOT - Solo registrar
+    datadogEvent('SASMEX Bot: Promesa rechazada', String(reason), 'error');
     console.log('🛡️ Bot continúa ejecutándose...');
 });
 
