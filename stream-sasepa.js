@@ -6,9 +6,19 @@
 const puppeteer = require('puppeteer');
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
 async function streamSasepa() {
     console.log('🚀 Iniciando Puppeteer...');
+    
+    const videoPath = path.join(__dirname, 'sasepa-stream.mp4');
+    const screenshotsDir = path.join(__dirname, 'screenshots');
+    
+    // Limpiar screenshots anteriores
+    if (fs.existsSync(screenshotsDir)) {
+        fs.rmSync(screenshotsDir, { recursive: true, force: true });
+    }
+    fs.mkdirSync(screenshotsDir, { recursive: true });
     
     const browser = await puppeteer.launch({
         headless: true,
@@ -37,79 +47,55 @@ async function streamSasepa() {
         });
 
         console.log('⏳ Esperando a que la página cargue completamente...');
-        await new Promise(resolve => setTimeout(resolve, 3000)); // Esperar 3 segundos para que cargue todo
+        await new Promise(resolve => setTimeout(resolve, 2000));
 
-        // Iniciar grabación de video (si está disponible)
-        const videoPath = path.join(__dirname, 'sasepa-stream.mp4');
-        
-        console.log('🎥 Iniciando grabación por 5 segundos...');
-        
-        // Puppeteer no tiene grabación de video nativa, pero podemos:
-        // 1. Tomar múltiples screenshots
-        // 2. O usar la API experimental de video si está disponible
-        
-        // Opción 1: Múltiples screenshots (más compatible)
-        const screenshotsDir = path.join(__dirname, 'screenshots');
-        if (!fs.existsSync(screenshotsDir)) {
-            fs.mkdirSync(screenshotsDir);
-        }
-
+        // Configuración de grabación
         const duration = 5; // segundos
-        const fps = 2; // frames por segundo
+        const fps = 10; // frames por segundo (más suave)
         const totalFrames = duration * fps;
+        const frameInterval = 1000 / fps; // milisegundos entre frames
 
+        console.log(`🎥 Iniciando grabación por ${duration} segundos a ${fps} fps...`);
         console.log(`📸 Capturando ${totalFrames} frames...`);
         
+        // Capturar frames
         for (let i = 0; i < totalFrames; i++) {
-            const screenshotPath = path.join(screenshotsDir, `frame-${String(i).padStart(3, '0')}.png`);
+            const framePath = path.join(screenshotsDir, `frame-${String(i).padStart(4, '0')}.png`);
             await page.screenshot({
-                path: screenshotPath,
+                path: framePath,
                 fullPage: false
             });
-            console.log(`✅ Frame ${i + 1}/${totalFrames} capturado`);
-            await new Promise(resolve => setTimeout(resolve, 1000 / fps)); // Esperar entre frames
+            
+            if ((i + 1) % 10 === 0 || i === 0) {
+                console.log(`✅ Frame ${i + 1}/${totalFrames} capturado`);
+            }
+            
+            // Esperar antes del siguiente frame (excepto en el último)
+            if (i < totalFrames - 1) {
+                await new Promise(resolve => setTimeout(resolve, frameInterval));
+            }
         }
 
-        console.log('✅ Grabación completada!');
-        console.log(`📁 Screenshots guardados en: ${screenshotsDir}`);
+        console.log('✅ Todos los frames capturados!');
+        console.log(`📁 Frames guardados en: ${screenshotsDir}`);
         
-        // Intentar usar la API de video si está disponible (experimental)
+        // Crear video con ffmpeg
         try {
-            const client = await page.target().createCDPSession();
-            await client.send('Page.startScreencast', {
-                format: 'png',
-                quality: 100,
-                maxWidth: 1920,
-                maxHeight: 1080
+            console.log('🎞️  Creando video con ffmpeg...');
+            execSync(`ffmpeg -y -framerate ${fps} -i ${screenshotsDir}/frame-%04d.png -c:v libx264 -pix_fmt yuv420p -crf 23 -preset fast ${videoPath}`, {
+                stdio: 'inherit'
             });
-
-            const frames = [];
-            const frameHandler = (frame) => {
-                frames.push(Buffer.from(frame.data, 'base64'));
-            };
+            console.log(`\n✅ Video creado exitosamente: ${videoPath}`);
+            console.log(`📹 Puedes ver el video en: ${videoPath}`);
             
-            client.on('Page.screencastFrame', async (event) => {
-                frameHandler(event);
-                await client.send('Page.screencastFrameAck', { sessionId: event.sessionId });
-            });
-
-            console.log('🎬 Grabando video por 5 segundos...');
-            await new Promise(resolve => setTimeout(resolve, 5000));
-
-            await client.send('Page.stopScreencast');
-            client.removeAllListeners('Page.screencastFrame');
-
-            if (frames.length > 0) {
-                console.log(`✅ Capturados ${frames.length} frames del screencast`);
-                // Guardar el primer frame como ejemplo
-                fs.writeFileSync(
-                    path.join(__dirname, 'sasepa-screencast-frame.png'),
-                    frames[0]
-                );
-                console.log('💾 Frame del screencast guardado como sasepa-screencast-frame.png');
-            }
-        } catch (error) {
-            console.log('⚠️  API de screencast no disponible, usando solo screenshots');
+            // Mostrar información del video
+            const stats = fs.statSync(videoPath);
+            const sizeMB = (stats.size / (1024 * 1024)).toFixed(2);
+            console.log(`📊 Tamaño del video: ${sizeMB} MB`);
+        } catch (ffmpegError) {
+            console.error('❌ Error al crear video con ffmpeg:', ffmpegError.message);
+            console.log('💡 Los frames están en la carpeta screenshots/');
+            console.log(`   Ejecuta manualmente: ffmpeg -framerate ${fps} -i screenshots/frame-%04d.png -c:v libx264 -pix_fmt yuv420p ${videoPath}`);
         }
 
         // Tomar un screenshot final de alta calidad
@@ -132,7 +118,7 @@ async function streamSasepa() {
 // Ejecutar
 streamSasepa()
     .then(() => {
-        console.log('✨ Proceso completado exitosamente!');
+        console.log('\n✨ Proceso completado exitosamente!');
         process.exit(0);
     })
     .catch((error) => {
