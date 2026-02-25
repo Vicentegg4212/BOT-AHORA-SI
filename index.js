@@ -5115,7 +5115,9 @@ async function streamToKick(retryCount = 0) {
 
     try {
         console.log('🌐 Iniciando navegador (headless mode)...');
-        browser = await puppeteer.launch({
+        // Usar puppeteer importado al inicio del archivo
+        const puppeteerModule = require('puppeteer');
+        browser = await puppeteerModule.launch({
             headless: true, // FORZAR headless
             args: [
                 '--no-sandbox',
