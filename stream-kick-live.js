@@ -333,7 +333,9 @@ async function streamToKick(retryCount = 0) {
             '-sc_threshold', '0',
             '-profile:v', 'baseline', // Cambiado a baseline para menor latencia
             '-pix_fmt', 'yuv420p',
-            '-threads', '2', // Limitar threads para mejor estabilidad
+            '-threads', '1', // Un solo thread para menor RAM
+            '-thread_type', 'slice',
+            '-x264opts', 'threads=1:thread-input=1:thread-lookahead=1',
             '-f', 'flv',
             '-flvflags', 'no_duration_filesize', // Optimización para streaming
             STREAM_URL
@@ -437,7 +439,7 @@ async function streamToKick(retryCount = 0) {
 
                 if (screenshotBuffer && ffmpegProcess.stdin && !ffmpegProcess.stdin.destroyed) {
                     // Verificar que el pipe no esté lleno antes de escribir
-                    if (ffmpegProcess.stdin.writableLength < 1024 * 1024) { // Menos de 1MB en buffer
+                    if (ffmpegProcess.stdin.writableLength < MAX_BUFFER_SIZE) { // Buffer reducido para 4GB RAM
                         ffmpegProcess.stdin.write(screenshotBuffer, (err) => {
                             if (err) {
                                 console.error('⚠️  Error escribiendo a ffmpeg:', err.message);
@@ -452,12 +454,22 @@ async function streamToKick(retryCount = 0) {
                 frameCount++;
                 const frameTime = Date.now() - frameStartTime;
 
-                // Mostrar progreso cada 5 segundos (menos frecuente para no saturar logs)
-                if (frameCount % (FPS * 5) === 0) {
+                // Mostrar progreso cada 10 segundos con uso de RAM
+                if (frameCount % (FPS * 10) === 0) {
                     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
                     const fpsActual = (frameCount / elapsed).toFixed(1);
                     const avgFrameTime = (frameTime).toFixed(0);
-                    console.log(`📹 Transmitiendo... ${frameCount} frames | ${elapsed}s | ${fpsActual} fps | Frame: ${avgFrameTime}ms`);
+                    const memUsage = process.memoryUsage();
+                    const memMB = (memUsage.heapUsed / 1024 / 1024).toFixed(1);
+                    console.log(`📹 Transmitiendo... ${frameCount} frames | ${elapsed}s | ${fpsActual} fps | Frame: ${avgFrameTime}ms | RAM: ${memMB}MB`);
+                    
+                    // GC si RAM > 3GB
+                    if (memUsage.heapUsed > 3 * 1024 * 1024 * 1024) {
+                        if (global.gc) {
+                            global.gc();
+                            console.log('🧹 Garbage collection ejecutado');
+                        }
+                    }
                 }
 
                 // Verificar duración (solo si está configurada)
