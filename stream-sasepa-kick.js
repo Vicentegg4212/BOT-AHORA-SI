@@ -15,6 +15,17 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 
+// Intentar usar ffmpeg de npm si está disponible
+let ffmpegPath = 'ffmpeg';
+try {
+    const ffmpegInstaller = require('@ffmpeg-installer/ffmpeg');
+    ffmpegPath = ffmpegInstaller.path;
+    console.log('✅ Usando ffmpeg de npm (@ffmpeg-installer/ffmpeg)');
+} catch (e) {
+    // Si no está instalado, usar ffmpeg del sistema
+    console.log('ℹ️  Usando ffmpeg del sistema (si está disponible)');
+}
+
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN
 // ═══════════════════════════════════════════════════════════════════════════
@@ -197,7 +208,7 @@ console.log(`💾 Optimizado para: 4GB RAM máximo`);
             ffmpegArgs.splice(1, 0, '-t', String(STREAM_DURATION));
         }
 
-        ffmpegProcess = spawn('ffmpeg', ffmpegArgs, {
+        ffmpegProcess = spawn(ffmpegPath, ffmpegArgs, {
             stdio: ['pipe', 'pipe', 'pipe']
         });
 
