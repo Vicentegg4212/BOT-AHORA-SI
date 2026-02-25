@@ -1,6 +1,6 @@
 /**
  * Script para hacer streaming/grabación de https://www.sasepa.mx/
- * usando Puppeteer por unos segundos
+ * usando Puppeteer por 1 minuto
  */
 
 const puppeteer = require('puppeteer');
@@ -67,13 +67,14 @@ async function streamSasepa() {
         await new Promise(resolve => setTimeout(resolve, 3000));
 
         // Configuración de grabación
-        const duration = 5; // segundos
+        const duration = 60; // segundos (1 minuto)
         const fps = 10; // frames por segundo (más suave)
         const totalFrames = duration * fps;
         const frameInterval = 1000 / fps; // milisegundos entre frames
 
-        console.log(`🎥 Iniciando grabación por ${duration} segundos a ${fps} fps...`);
+        console.log(`🎥 Iniciando grabación por ${duration} segundos (1 minuto) a ${fps} fps...`);
         console.log(`📸 Capturando ${totalFrames} frames...`);
+        console.log(`⏱️  Tiempo estimado: ~${Math.ceil(totalFrames * frameInterval / 1000)} segundos`);
         
         // Capturar frames
         for (let i = 0; i < totalFrames; i++) {
@@ -90,8 +91,11 @@ async function streamSasepa() {
                 fullPage: false
             });
             
-            if ((i + 1) % 10 === 0 || i === 0) {
-                console.log(`✅ Frame ${i + 1}/${totalFrames} capturado`);
+            // Mostrar progreso cada 50 frames o en puntos clave
+            if ((i + 1) % 50 === 0 || i === 0 || (i + 1) === totalFrames) {
+                const progress = ((i + 1) / totalFrames * 100).toFixed(1);
+                const elapsed = ((i + 1) * frameInterval / 1000).toFixed(1);
+                console.log(`✅ Frame ${i + 1}/${totalFrames} capturado (${progress}% - ${elapsed}s)`);
             }
             
             // Esperar antes del siguiente frame (excepto en el último)
