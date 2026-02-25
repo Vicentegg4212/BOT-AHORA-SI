@@ -38,7 +38,7 @@ async function streamToKick(retryCount = 0) {
     console.log('💾 Optimizado para: 4GB RAM máximo\n');
     
     const browser = await puppeteer.launch({
-        headless: 'new',
+        headless: true, // Forzar headless (sin interfaz gráfica)
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
