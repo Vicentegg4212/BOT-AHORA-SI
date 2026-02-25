@@ -80,7 +80,7 @@ const CONFIG = {
     
     // Puppeteer para imágenes
     puppeteerOptions: {
-        headless: 'new',
+        headless: true, // Forzar headless para evitar error de servidor X
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
