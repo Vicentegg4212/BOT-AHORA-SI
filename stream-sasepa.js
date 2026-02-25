@@ -176,8 +176,7 @@ app.get('/stream', async (req, res) => {
         
         const screenshot = await page.screenshot({
             type: 'png',
-            fullPage: false,
-            quality: 80
+            fullPage: false
         });
         
         res.setHeader('Content-Type', 'image/png');
@@ -245,7 +244,6 @@ async function startStreaming() {
             const screenshot = await page.screenshot({
                 type: 'png',
                 fullPage: false,
-                quality: 80,
                 encoding: 'base64'
             });
             
@@ -284,7 +282,6 @@ io.on('connection', (socket) => {
         page.screenshot({
             type: 'png',
             fullPage: false,
-            quality: 80,
             encoding: 'base64'
         }).then(screenshot => {
             socket.emit('frame', screenshot);
