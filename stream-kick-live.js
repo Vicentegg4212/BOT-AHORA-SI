@@ -14,15 +14,16 @@ const KICK_STREAM_KEY = 'sk_us-west-2_qaJSZ28Skfyc_EFop1LvD87ltP2cMSZSVPVObXxa56
 const KICK_RTMPS_URL = 'rtmps://fa723fc1b171.global-contribute.live-video.net';
 const STREAM_URL = `${KICK_RTMPS_URL}/app/${KICK_STREAM_KEY}`;
 
-// Configuración de streaming
+// Configuración de streaming (optimizado para 4GB RAM)
 const STREAM_DURATION = 0; // 0 = infinito (24 horas)
-const FPS = 15; // Reducido para mayor estabilidad
-const RESOLUTION = '1920x1080';
-const BITRATE = '2000k'; // Reducido para mejor rendimiento
+const FPS = 10; // FPS reducido para menor uso de RAM
+const RESOLUTION = '1280x720'; // Resolución reducida (720p)
+const BITRATE = '1500k'; // Bitrate reducido
 const MAX_RETRIES = 10; // Intentos de reconexión
 const RETRY_DELAY = 5000; // 5 segundos entre reintentos
-const SCREENSHOT_QUALITY = 70; // Calidad de screenshot (más rápido)
-const SCREENSHOT_TIMEOUT = 10000; // Timeout aumentado para screenshots
+const SCREENSHOT_QUALITY = 60; // Calidad reducida para menor RAM
+const SCREENSHOT_TIMEOUT = 8000;
+const MAX_BUFFER_SIZE = 512 * 1024; // Buffer máximo 512KB
 
 async function streamToKick(retryCount = 0) {
     console.log('\n' + '='.repeat(60));
@@ -34,25 +35,54 @@ async function streamToKick(retryCount = 0) {
         console.log(`🔄 Reintento #${retryCount}`);
     }
     console.log('='.repeat(60) + '\n');
+    console.log('💾 Optimizado para: 4GB RAM máximo\n');
     
     const browser = await puppeteer.launch({
-        headless: 'new', // Usar headless para servidor sin X
+        headless: 'new',
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--window-size=1920,1080',
+            '--window-size=1280,720',
             '--disable-blink-features=AutomationControlled',
             '--autoplay-policy=no-user-gesture-required',
             '--disable-gpu',
-            '--disable-software-rasterizer'
+            '--disable-software-rasterizer',
+            '--disable-extensions',
+            '--disable-plugins',
+            '--disable-images',
+            '--disable-javascript-harmony-shipping',
+            '--disable-background-networking',
+            '--disable-background-timer-throttling',
+            '--disable-renderer-backgrounding',
+            '--disable-backgrounding-occluded-windows',
+            '--disable-ipc-flooding-protection',
+            '--js-flags=--max-old-space-size=512',
+            '--memory-pressure-off',
+            '--max_old_space_size=512',
+            '--disable-web-security',
+            '--disable-features=IsolateOrigins,site-per-process',
+            '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         ]
     });
 
     try {
         const page = await browser.newPage();
         await page.setJavaScriptEnabled(true);
-        await page.setViewport({ width: 1920, height: 1080 });
+        await page.setViewport({ width: 1280, height: 720 });
+        
+        // Anti-detección de bot
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['es-ES', 'es', 'en-US', 'en'] });
+            window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
+        });
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8'
+        });
 
         // URL del video de YouTube
         const YOUTUBE_URL = 'https://www.youtube.com/watch?v=3CMVAtg8BTM';
