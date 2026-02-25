@@ -309,13 +309,49 @@ process.on('SIGINT', async () => {
     });
 });
 
+// Función para obtener IP pública
+async function getPublicIP() {
+    try {
+        const response = await fetch('https://api.ipify.org?format=json');
+        const data = await response.json();
+        return data.ip;
+    } catch (error) {
+        try {
+            const response = await fetch('http://ifconfig.me/ip');
+            return await response.text();
+        } catch (e) {
+            return 'N/A';
+        }
+    }
+}
+
 // Iniciar servidor
 server.listen(PORT, '0.0.0.0', async () => {
+    const publicIP = await getPublicIP();
+    const os = require('os');
+    const networkInterfaces = os.networkInterfaces();
+    let localIP = 'localhost';
+    
+    // Obtener IP local
+    for (const interfaceName in networkInterfaces) {
+        const interfaces = networkInterfaces[interfaceName];
+        for (const iface of interfaces) {
+            if (iface.family === 'IPv4' && !iface.internal) {
+                localIP = iface.address;
+                break;
+            }
+        }
+        if (localIP !== 'localhost') break;
+    }
+    
     console.log(`\n╔══════════════════════════════════════════════════════════════╗`);
     console.log(`║     STREAM LIVE SASEPA.MX - PUPPETEER                        ║`);
     console.log(`╚══════════════════════════════════════════════════════════════╝`);
     console.log(`\n🌐 Servidor iniciado en puerto ${PORT}`);
-    console.log(`📺 Accede a: http://localhost:${PORT}`);
+    console.log(`📺 Accede localmente: http://${localIP}:${PORT}`);
+    if (publicIP !== 'N/A') {
+        console.log(`📺 Accede remotamente: http://${publicIP}:${PORT}`);
+    }
     console.log(`🎯 Stream de: ${TARGET_URL}\n`);
     
     // Inicializar navegador
