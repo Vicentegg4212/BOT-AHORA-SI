@@ -220,6 +220,12 @@ async function initBrowser() {
         // Esperar a que la página esté completamente cargada
         await new Promise(resolve => setTimeout(resolve, 3000));
         
+        // Mantener la página activa - prevenir cierre automático
+        page.on('close', () => {
+            console.log('⚠️ Página cerrada, se reinicializará...');
+            page = null;
+        });
+        
         // Iniciar streaming
         startStreaming();
         
@@ -240,6 +246,13 @@ async function startStreaming() {
         try {
             if (!page || !isStreaming) return;
             
+            // Verificar que la página no esté cerrada
+            if (page.isClosed()) {
+                console.log('⚠️ Página cerrada, reinicializando...');
+                await initBrowser();
+                return;
+            }
+            
             // Capturar screenshot
             const screenshot = await page.screenshot({
                 type: 'png',
@@ -251,8 +264,21 @@ async function startStreaming() {
             io.emit('frame', screenshot);
             
         } catch (error) {
-            console.error('Error capturando frame:', error);
-            io.emit('error', error.message);
+            if (error.message.includes('Session closed') || error.message.includes('Target closed')) {
+                console.log('⚠️ Sesión cerrada, reinicializando navegador...');
+                isStreaming = false;
+                if (browser) {
+                    try {
+                        await browser.close();
+                    } catch (e) {}
+                }
+                browser = null;
+                page = null;
+                await initBrowser();
+            } else {
+                console.error('Error capturando frame:', error.message);
+                io.emit('error', error.message);
+            }
         }
     };
     
