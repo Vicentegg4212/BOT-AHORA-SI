@@ -15,16 +15,23 @@ const KICK_RTMPS_URL = 'rtmps://fa723fc1b171.global-contribute.live-video.net';
 const STREAM_URL = `${KICK_RTMPS_URL}/app/${KICK_STREAM_KEY}`;
 
 // Configuración de streaming
-const STREAM_DURATION = 60; // segundos (0 = infinito)
+const STREAM_DURATION = 0; // 0 = infinito (24 horas)
 const FPS = 30;
 const RESOLUTION = '1920x1080';
 const BITRATE = '2500k';
+const MAX_RETRIES = 10; // Intentos de reconexión
+const RETRY_DELAY = 5000; // 5 segundos entre reintentos
 
-async function streamToKick() {
-    console.log('🚀 Iniciando streaming EN VIVO a Kick...');
+async function streamToKick(retryCount = 0) {
+    console.log('\n' + '='.repeat(60));
+    console.log('🚀 Iniciando streaming EN VIVO a Kick (24 HORAS)...');
     console.log(`📡 RTMPS: ${KICK_RTMPS_URL}`);
     console.log(`🔑 Stream Key: ${KICK_STREAM_KEY.substring(0, 30)}...`);
     console.log(`🎥 URL completa: ${STREAM_URL.substring(0, 60)}...`);
+    if (retryCount > 0) {
+        console.log(`🔄 Reintento #${retryCount}`);
+    }
+    console.log('='.repeat(60) + '\n');
     
     const browser = await puppeteer.launch({
         headless: 'new', // Usar headless para servidor sin X
@@ -99,8 +106,9 @@ async function streamToKick() {
         }
 
         console.log('\n🎥 Iniciando transmisión EN VIVO a Kick...');
-        console.log(`⏱️  Duración: ${STREAM_DURATION > 0 ? STREAM_DURATION + ' segundos' : 'Infinito (Ctrl+C para detener)'}`);
-        console.log(`📊 Configuración: ${FPS} fps, ${RESOLUTION}, ${BITRATE} bitrate\n`);
+        console.log(`⏱️  Duración: ${STREAM_DURATION > 0 ? STREAM_DURATION + ' segundos' : '24 HORAS CONTINUAS (Ctrl+C para detener)'}`);
+        console.log(`📊 Configuración: ${FPS} fps, ${RESOLUTION}, ${BITRATE} bitrate`);
+        console.log(`🔄 Reintentos automáticos: ${MAX_RETRIES} intentos máximo\n`);
 
         // Crear pipe para transmitir frames en tiempo real
         const framesDir = path.join(__dirname, 'kick-live-frames');
@@ -163,11 +171,34 @@ async function streamToKick() {
         ffmpegProcess.on('error', (error) => {
             console.error('\n❌ Error en ffmpeg:', error.message);
             isStreaming = false;
+            // Intentar reconectar si no hemos excedido los reintentos
+            if (retryCount < MAX_RETRIES) {
+                console.log(`\n🔄 Intentando reconectar en ${RETRY_DELAY/1000} segundos...`);
+                setTimeout(() => {
+                    streamToKick(retryCount + 1).catch(console.error);
+                }, RETRY_DELAY);
+                return;
+            } else {
+                console.error('\n💥 Máximo de reintentos alcanzado. Deteniendo...');
+                process.exit(1);
+            }
         });
 
         ffmpegProcess.on('close', (code) => {
             console.log(`\n📡 Transmisión finalizada. Código de salida: ${code}`);
             isStreaming = false;
+            
+            // Si el código no es 0 (éxito) y no es una terminación manual, intentar reconectar
+            if (code !== 0 && code !== null && retryCount < MAX_RETRIES) {
+                console.log(`\n🔄 Código de error: ${code}. Intentando reconectar en ${RETRY_DELAY/1000} segundos...`);
+                setTimeout(() => {
+                    streamToKick(retryCount + 1).catch(console.error);
+                }, RETRY_DELAY);
+                return;
+            } else if (code !== 0 && code !== null) {
+                console.error('\n💥 Máximo de reintentos alcanzado. Deteniendo...');
+                process.exit(1);
+            }
         });
 
         // Función para capturar y transmitir frames en tiempo real
@@ -195,7 +226,7 @@ async function streamToKick() {
                     console.log(`📹 Transmitiendo... ${frameCount} frames | ${elapsed}s | ${fpsActual} fps`);
                 }
 
-                // Verificar duración
+                // Verificar duración (solo si está configurada)
                 if (STREAM_DURATION > 0 && (Date.now() - startTime) >= STREAM_DURATION * 1000) {
                     console.log('\n⏱️  Duración alcanzada, finalizando transmisión...');
                     isStreaming = false;
@@ -203,6 +234,13 @@ async function streamToKick() {
                         ffmpegProcess.stdin.end();
                     }
                     return;
+                }
+                
+                // Mostrar tiempo transcurrido cada minuto (para transmisión 24h)
+                if (STREAM_DURATION === 0 && frameCount % (FPS * 60) === 0 && frameCount > 0) {
+                    const hours = Math.floor((Date.now() - startTime) / (1000 * 60 * 60));
+                    const minutes = Math.floor(((Date.now() - startTime) % (1000 * 60 * 60)) / (1000 * 60));
+                    console.log(`\n⏰ Tiempo transcurrido: ${hours}h ${minutes}m | Frames: ${frameCount} | Estado: TRANSMITIENDO`);
                 }
 
                 // Programar siguiente frame
@@ -237,7 +275,22 @@ async function streamToKick() {
             });
         } else {
             // Si es infinito, esperar hasta que se detenga manualmente
-            console.log('🔄 Transmisión continua. Presiona Ctrl+C para detener.');
+            console.log('🔄 Transmisión continua 24/7. Presiona Ctrl+C para detener.');
+            console.log('📊 El script se mantendrá activo y transmitiendo indefinidamente.\n');
+            
+            // Mantener el proceso vivo y monitorear la conexión
+            const healthCheck = setInterval(() => {
+                if (!isStreaming && retryCount < MAX_RETRIES) {
+                    clearInterval(healthCheck);
+                    console.log('\n⚠️  Transmisión detenida. Intentando reconectar...');
+                    setTimeout(() => {
+                        streamToKick(retryCount + 1).catch(console.error);
+                    }, RETRY_DELAY);
+                } else if (!isStreaming) {
+                    clearInterval(healthCheck);
+                }
+            }, 10000); // Verificar cada 10 segundos
+            
             await new Promise(() => {}); // Esperar indefinidamente
         }
 
@@ -258,22 +311,60 @@ async function streamToKick() {
 
     } catch (error) {
         console.error('❌ Error durante la transmisión:', error);
-        throw error;
+        
+        // Intentar reconectar si no hemos excedido los reintentos
+        if (retryCount < MAX_RETRIES) {
+            console.log(`\n🔄 Error capturado. Intentando reconectar en ${RETRY_DELAY/1000} segundos... (Intento ${retryCount + 1}/${MAX_RETRIES})`);
+            try {
+                await browser.close();
+            } catch (e) {}
+            
+            setTimeout(() => {
+                streamToKick(retryCount + 1).catch(console.error);
+            }, RETRY_DELAY);
+            return;
+        } else {
+            console.error('\n💥 Máximo de reintentos alcanzado. Deteniendo...');
+            try {
+                await browser.close();
+            } catch (e) {}
+            throw error;
+        }
     } finally {
-        await browser.close();
-        console.log('🔒 Navegador cerrado');
+        // Solo cerrar el navegador si no vamos a reintentar
+        if (retryCount >= MAX_RETRIES || !isStreaming) {
+            try {
+                await browser.close();
+                console.log('🔒 Navegador cerrado');
+            } catch (e) {}
+        }
     }
 }
 
 // Manejar señales para detener gracefully
+let isShuttingDown = false;
+
 process.on('SIGINT', () => {
-    console.log('\n\n⚠️  Señal de interrupción recibida. Deteniendo transmisión...');
-    process.exit(0);
+    if (!isShuttingDown) {
+        isShuttingDown = true;
+        console.log('\n\n⚠️  Señal de interrupción recibida (Ctrl+C).');
+        console.log('🛑 Deteniendo transmisión de forma segura...');
+        console.log('⏳ Esto puede tomar unos segundos...\n');
+        setTimeout(() => {
+            process.exit(0);
+        }, 3000);
+    }
 });
 
 process.on('SIGTERM', () => {
-    console.log('\n\n⚠️  Señal de terminación recibida. Deteniendo transmisión...');
-    process.exit(0);
+    if (!isShuttingDown) {
+        isShuttingDown = true;
+        console.log('\n\n⚠️  Señal de terminación recibida.');
+        console.log('🛑 Deteniendo transmisión de forma segura...\n');
+        setTimeout(() => {
+            process.exit(0);
+        }, 3000);
+    }
 });
 
 // Ejecutar
