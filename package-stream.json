@@ -1,0 +1,17 @@
+{
+  "name": "sasepa-stream-kick",
+  "version": "1.0.0",
+  "description": "Streaming SASEPA a Kick - Solo NPM",
+  "main": "stream-sasepa-kick.js",
+  "scripts": {
+    "start": "node stream-sasepa-kick.js",
+    "stream": "node stream-sasepa-kick.js"
+  },
+  "dependencies": {
+    "puppeteer": "^24.37.2",
+    "@ffmpeg-installer/ffmpeg": "^1.1.0"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
