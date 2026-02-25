@@ -34,6 +34,9 @@ async function streamSasepa() {
     try {
         const page = await browser.newPage();
         
+        // Activar JavaScript explícitamente (ya está activado por defecto, pero lo confirmamos)
+        await page.setJavaScriptEnabled(true);
+        
         // Configurar viewport
         await page.setViewport({
             width: 1920,
@@ -41,13 +44,27 @@ async function streamSasepa() {
         });
 
         console.log('📡 Navegando a https://www.sasepa.mx/...');
+        console.log('✅ JavaScript habilitado en el navegador');
+        
         await page.goto('https://www.sasepa.mx/', {
             waitUntil: 'networkidle2',
             timeout: 30000
         });
 
-        console.log('⏳ Esperando a que la página cargue completamente...');
-        await new Promise(resolve => setTimeout(resolve, 2000));
+        console.log('⏳ Esperando a que JavaScript se ejecute completamente...');
+        // Esperar a que el JavaScript de la página se ejecute
+        await page.evaluate(() => {
+            return new Promise((resolve) => {
+                if (document.readyState === 'complete') {
+                    resolve();
+                } else {
+                    window.addEventListener('load', resolve);
+                }
+            });
+        });
+        
+        // Esperar un poco más para que las animaciones y scripts dinámicos se ejecuten
+        await new Promise(resolve => setTimeout(resolve, 3000));
 
         // Configuración de grabación
         const duration = 5; // segundos
@@ -61,6 +78,13 @@ async function streamSasepa() {
         // Capturar frames
         for (let i = 0; i < totalFrames; i++) {
             const framePath = path.join(screenshotsDir, `frame-${String(i).padStart(4, '0')}.png`);
+            
+            // Asegurar que JavaScript se ejecute antes de cada screenshot
+            await page.evaluate(() => {
+                // Forzar ejecución de cualquier script pendiente
+                return Promise.resolve();
+            });
+            
             await page.screenshot({
                 path: framePath,
                 fullPage: false
