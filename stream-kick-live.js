@@ -92,35 +92,95 @@ async function streamToKick(retryCount = 0) {
             await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (e) {}
 
-        // Reproducir el video y poner en pantalla completa
-        console.log('▶️  Reproduciendo video y configurando pantalla completa...');
+        // Reproducir el video, saltar anuncios y poner en pantalla completa
+        console.log('▶️  Configurando video: reproducción, sin anuncios y pantalla completa...');
         
         try {
             // Esperar a que el reproductor esté listo
-            await page.waitForSelector('video', { timeout: 10000 });
+            await page.waitForSelector('video', { timeout: 15000 });
+            console.log('✅ Reproductor de video detectado');
+            
+            // Configurar para saltar anuncios automáticamente ANTES de reproducir
+            await page.evaluate(() => {
+                // Función para saltar anuncios
+                const skipAds = () => {
+                    // Buscar botón de saltar anuncio
+                    const skipButton = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern');
+                    if (skipButton && skipButton.offsetParent !== null) {
+                        skipButton.click();
+                        console.log('✅ Anuncio saltado');
+                        return true;
+                    }
+                    
+                    // Buscar overlay de anuncio y cerrarlo
+                    const adOverlay = document.querySelector('.ytp-ad-overlay-close-button');
+                    if (adOverlay) {
+                        adOverlay.click();
+                        return true;
+                    }
+                    
+                    return false;
+                };
+                
+                // Observar cambios en el DOM para detectar anuncios
+                const adObserver = new MutationObserver(() => {
+                    skipAds();
+                });
+                
+                adObserver.observe(document.body, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                    attributeFilter: ['class', 'style']
+                });
+                
+                // También verificar periódicamente
+                setInterval(skipAds, 500);
+                
+                // Guardar función globalmente
+                window.skipYouTubeAds = skipAds;
+            });
+            
+            await new Promise(resolve => setTimeout(resolve, 2000));
             
             // Reproducir el video
             await page.evaluate(() => {
                 const video = document.querySelector('video');
                 if (video) {
-                    video.play();
-                    // Saltar anuncios si es posible
-                    const skipButton = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button');
-                    if (skipButton) {
-                        skipButton.click();
+                    // Forzar reproducción
+                    video.muted = false;
+                    video.play().catch(e => {
+                        console.log('Error al reproducir:', e);
+                    });
+                    
+                    // Saltar anuncios inmediatamente
+                    if (window.skipYouTubeAds) {
+                        window.skipYouTubeAds();
                     }
                 }
             });
             
+            console.log('✅ Video iniciado');
             await new Promise(resolve => setTimeout(resolve, 3000));
 
-            // Intentar poner en pantalla completa
+            // Intentar poner en pantalla completa - Múltiples métodos
+            console.log('🖥️  Activando pantalla completa...');
             await page.evaluate(() => {
                 const video = document.querySelector('video');
+                const player = document.querySelector('#movie_player');
+                
+                // Método 1: Botón de pantalla completa de YouTube
+                const fullscreenButton = document.querySelector('.ytp-fullscreen-button, button[aria-label*="Pantalla completa"], button[aria-label*="Full screen"]');
+                if (fullscreenButton) {
+                    fullscreenButton.click();
+                    console.log('✅ Pantalla completa activada (botón)');
+                    return true;
+                }
+                
+                // Método 2: API de pantalla completa del video
                 if (video) {
-                    // Intentar entrar en pantalla completa
                     if (video.requestFullscreen) {
-                        video.requestFullscreen();
+                        video.requestFullscreen().catch(e => console.log('Error fullscreen:', e));
                     } else if (video.webkitRequestFullscreen) {
                         video.webkitRequestFullscreen();
                     } else if (video.mozRequestFullScreen) {
@@ -128,33 +188,66 @@ async function streamToKick(retryCount = 0) {
                     } else if (video.msRequestFullscreen) {
                         video.msRequestFullscreen();
                     }
-                    
-                    // También intentar con el botón de YouTube
-                    const fullscreenButton = document.querySelector('.ytp-fullscreen-button');
-                    if (fullscreenButton) {
-                        fullscreenButton.click();
-                    }
                 }
+                
+                // Método 3: API de pantalla completa del documento
+                if (document.documentElement.requestFullscreen) {
+                    document.documentElement.requestFullscreen().catch(e => console.log('Error fullscreen doc:', e));
+                } else if (document.documentElement.webkitRequestFullscreen) {
+                    document.documentElement.webkitRequestFullscreen();
+                }
+                
+                return false;
             });
             
-            console.log('✅ Video en reproducción');
             await new Promise(resolve => setTimeout(resolve, 2000));
-
-            // Configurar para saltar anuncios automáticamente
-            await page.evaluate(() => {
-                // Observar y saltar anuncios
-                const observer = new MutationObserver(() => {
-                    const skipButton = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button');
-                    if (skipButton && skipButton.offsetParent !== null) {
-                        skipButton.click();
-                    }
-                });
-                
-                observer.observe(document.body, {
-                    childList: true,
-                    subtree: true
-                });
+            
+            // Verificar si está en pantalla completa
+            const isFullscreen = await page.evaluate(() => {
+                return !!(document.fullscreenElement || 
+                         document.webkitFullscreenElement || 
+                         document.mozFullScreenElement || 
+                         document.msFullscreenElement);
             });
+            
+            if (isFullscreen) {
+                console.log('✅ Pantalla completa activada');
+            } else {
+                console.log('⚠️  No se pudo activar pantalla completa automáticamente');
+            }
+
+            // Configurar monitoreo continuo para saltar anuncios durante la transmisión
+            await page.evaluate(() => {
+                // Observador mejorado para anuncios
+                const adMonitor = setInterval(() => {
+                    // Buscar y saltar anuncios
+                    const skipButtons = document.querySelectorAll('.ytp-ad-skip-button, .ytp-skip-ad-button, .ytp-ad-skip-button-modern');
+                    skipButtons.forEach(btn => {
+                        if (btn.offsetParent !== null) {
+                            btn.click();
+                        }
+                    });
+                    
+                    // Cerrar overlays de anuncios
+                    const closeButtons = document.querySelectorAll('.ytp-ad-overlay-close-button, .ytp-ad-text');
+                    closeButtons.forEach(btn => {
+                        if (btn.offsetParent !== null && btn.textContent?.includes('Cerrar')) {
+                            btn.click();
+                        }
+                    });
+                    
+                    // Si hay un anuncio reproduciéndose, intentar saltarlo
+                    const adPlaying = document.querySelector('.ad-showing, .ad-interrupting');
+                    if (adPlaying && window.skipYouTubeAds) {
+                        window.skipYouTubeAds();
+                    }
+                }, 1000); // Verificar cada segundo
+                
+                // Guardar intervalo para limpiar después
+                window.adMonitorInterval = adMonitor;
+            });
+
+            console.log('✅ Configuración completa: Video reproduciendo, anuncios bloqueados, pantalla completa activada');
 
         } catch (error) {
             console.log('⚠️  Error configurando video:', error.message);
