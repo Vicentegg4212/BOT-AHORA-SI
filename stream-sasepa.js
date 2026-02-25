@@ -205,7 +205,7 @@ async function initBrowser() {
         console.log('✅ Página cargada exitosamente');
         
         // Esperar a que la página esté completamente cargada
-        await page.waitForTimeout(3000);
+        await new Promise(resolve => setTimeout(resolve, 3000));
         
         // Iniciar streaming
         startStreaming();
