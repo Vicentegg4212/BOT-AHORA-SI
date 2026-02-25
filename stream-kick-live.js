@@ -27,15 +27,16 @@ async function streamToKick() {
     console.log(`🎥 URL completa: ${STREAM_URL.substring(0, 60)}...`);
     
     const browser = await puppeteer.launch({
-        headless: false, // Necesario para capturar
+        headless: 'new', // Usar headless para servidor sin X
         args: [
             '--no-sandbox',
             '--disable-setuid-sandbox',
             '--disable-dev-shm-usage',
-            '--start-maximized',
             '--window-size=1920,1080',
             '--disable-blink-features=AutomationControlled',
-            '--autoplay-policy=no-user-gesture-required'
+            '--autoplay-policy=no-user-gesture-required',
+            '--disable-gpu',
+            '--disable-software-rasterizer'
         ]
     });
 
