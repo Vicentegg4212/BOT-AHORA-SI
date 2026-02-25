@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video SASEPA - Streaming</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            max-width: 1200px;
+            width: 100%;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 10px;
+            text-align: center;
+            font-size: 2.5em;
+        }
+        .subtitle {
+            text-align: center;
+            color: #666;
+            margin-bottom: 30px;
+            font-size: 1.1em;
+        }
+        .video-wrapper {
+            position: relative;
+            width: 100%;
+            max-width: 1920px;
+            margin: 0 auto;
+            background: #000;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+        video {
+            width: 100%;
+            height: auto;
+            display: block;
+        }
+        .info {
+            margin-top: 30px;
+            padding: 20px;
+            background: #f8f9fa;
+            border-radius: 10px;
+            text-align: center;
+        }
+        .info p {
+            margin: 10px 0;
+            color: #555;
+        }
+        .download-btn {
+            display: inline-block;
+            margin-top: 20px;
+            padding: 12px 30px;
+            background: #667eea;
+            color: white;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+            transition: background 0.3s;
+        }
+        .download-btn:hover {
+            background: #5568d3;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎥 Video SASEPA</h1>
+        <p class="subtitle">Streaming de https://www.sasepa.mx/</p>
+        
+        <div class="video-wrapper">
+            <video id="videoPlayer" controls autoplay muted>
+                <source src="sasepa-stream.mp4" type="video/mp4">
+                Tu navegador no soporta la reproducción de video HTML5.
+            </video>
+        </div>
+        
+        <div class="info">
+            <p><strong>📹 Video grabado con Puppeteer</strong></p>
+            <p>Duración: 5 segundos | Resolución: 1920x1080 | Formato: MP4</p>
+            <a href="sasepa-stream.mp4" download class="download-btn">⬇️ Descargar Video</a>
+        </div>
+    </div>
+    
+    <script>
+        // Intentar cargar el video
+        const video = document.getElementById('videoPlayer');
+        
+        video.addEventListener('error', function(e) {
+            console.error('Error al cargar video:', e);
+            document.querySelector('.video-wrapper').innerHTML = 
+                '<div class="loading"><p>⚠️ No se pudo cargar el video. Asegúrate de que el archivo sasepa-stream.mp4 esté en la misma carpeta que este HTML.</p></div>';
+        });
+        
+        video.addEventListener('loadeddata', function() {
+            console.log('✅ Video cargado correctamente');
+        });
+    </script>
+</body>
+</html>
