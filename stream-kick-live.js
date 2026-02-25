@@ -16,11 +16,13 @@ const STREAM_URL = `${KICK_RTMPS_URL}/app/${KICK_STREAM_KEY}`;
 
 // Configuración de streaming
 const STREAM_DURATION = 0; // 0 = infinito (24 horas)
-const FPS = 30;
+const FPS = 15; // Reducido para mayor estabilidad
 const RESOLUTION = '1920x1080';
-const BITRATE = '2500k';
+const BITRATE = '2000k'; // Reducido para mejor rendimiento
 const MAX_RETRIES = 10; // Intentos de reconexión
 const RETRY_DELAY = 5000; // 5 segundos entre reintentos
+const SCREENSHOT_QUALITY = 80; // Calidad de screenshot (más rápido)
+const SCREENSHOT_TIMEOUT = 5000; // Timeout para screenshots
 
 async function streamToKick(retryCount = 0) {
     console.log('\n' + '='.repeat(60));
@@ -277,7 +279,7 @@ async function streamToKick(retryCount = 0) {
             '-framerate', String(FPS),
             '-i', 'pipe:0',
             '-c:v', 'libx264',
-            '-preset', 'veryfast',
+            '-preset', 'ultrafast', // Cambiado a ultrafast para mejor rendimiento
             '-tune', 'zerolatency',
             '-b:v', BITRATE,
             '-maxrate', BITRATE,
@@ -285,9 +287,11 @@ async function streamToKick(retryCount = 0) {
             '-g', String(FPS * 2),
             '-keyint_min', String(FPS),
             '-sc_threshold', '0',
-            '-profile:v', 'main',
+            '-profile:v', 'baseline', // Cambiado a baseline para menor latencia
             '-pix_fmt', 'yuv420p',
+            '-threads', '2', // Limitar threads para mejor estabilidad
             '-f', 'flv',
+            '-flvflags', 'no_duration_filesize', // Optimización para streaming
             STREAM_URL
         ];
 
@@ -350,29 +354,62 @@ async function streamToKick(retryCount = 0) {
             }
         });
 
-        // Función para capturar y transmitir frames en tiempo real
+        // Función para capturar y transmitir frames en tiempo real (OPTIMIZADA)
         const captureAndStream = async () => {
             if (!isStreaming) return;
 
+            const frameStartTime = Date.now();
+            
             try {
-                // Capturar screenshot como buffer
-                const screenshotBuffer = await page.screenshot({
-                    fullPage: false,
-                    encoding: 'binary'
+                // Capturar screenshot optimizado (más rápido)
+                const screenshotBuffer = await Promise.race([
+                    page.screenshot({
+                        fullPage: false,
+                        encoding: 'binary',
+                        quality: SCREENSHOT_QUALITY,
+                        type: 'png',
+                        clip: {
+                            x: 0,
+                            y: 0,
+                            width: 1920,
+                            height: 1080
+                        }
+                    }),
+                    new Promise((_, reject) => 
+                        setTimeout(() => reject(new Error('Screenshot timeout')), SCREENSHOT_TIMEOUT)
+                    )
+                ]).catch(async (error) => {
+                    // Si hay error, intentar una vez más con configuración más simple
+                    console.log('⚠️  Reintentando captura...');
+                    return await page.screenshot({
+                        fullPage: false,
+                        encoding: 'binary'
+                    }).catch(() => null);
                 });
 
-                // Enviar frame a ffmpeg a través del pipe
-                if (ffmpegProcess.stdin && !ffmpegProcess.stdin.destroyed) {
-                    ffmpegProcess.stdin.write(screenshotBuffer);
+                if (screenshotBuffer && ffmpegProcess.stdin && !ffmpegProcess.stdin.destroyed) {
+                    // Verificar que el pipe no esté lleno antes de escribir
+                    if (ffmpegProcess.stdin.writableLength < 1024 * 1024) { // Menos de 1MB en buffer
+                        ffmpegProcess.stdin.write(screenshotBuffer, (err) => {
+                            if (err) {
+                                console.error('⚠️  Error escribiendo a ffmpeg:', err.message);
+                            }
+                        });
+                    } else {
+                        // Buffer lleno, esperar un poco
+                        await new Promise(resolve => setTimeout(resolve, 50));
+                    }
                 }
 
                 frameCount++;
+                const frameTime = Date.now() - frameStartTime;
 
-                // Mostrar progreso cada segundo
-                if (frameCount % FPS === 0) {
+                // Mostrar progreso cada 5 segundos (menos frecuente para no saturar logs)
+                if (frameCount % (FPS * 5) === 0) {
                     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
                     const fpsActual = (frameCount / elapsed).toFixed(1);
-                    console.log(`📹 Transmitiendo... ${frameCount} frames | ${elapsed}s | ${fpsActual} fps`);
+                    const avgFrameTime = (frameTime).toFixed(0);
+                    console.log(`📹 Transmitiendo... ${frameCount} frames | ${elapsed}s | ${fpsActual} fps | Frame: ${avgFrameTime}ms`);
                 }
 
                 // Verificar duración (solo si está configurada)
@@ -392,15 +429,24 @@ async function streamToKick(retryCount = 0) {
                     console.log(`\n⏰ Tiempo transcurrido: ${hours}h ${minutes}m | Frames: ${frameCount} | Estado: TRANSMITIENDO`);
                 }
 
+                // Calcular tiempo de espera dinámico basado en el tiempo real del frame
+                const actualFrameTime = Date.now() - frameStartTime;
+                const waitTime = Math.max(0, frameInterval - actualFrameTime);
+
                 // Programar siguiente frame
                 if (isStreaming) {
-                    setTimeout(captureAndStream, frameInterval);
+                    setTimeout(captureAndStream, waitTime);
                 }
 
             } catch (error) {
-                console.error('❌ Error capturando frame:', error.message);
+                // Manejo de errores mejorado - no detener, solo reintentar
+                if (error.message && !error.message.includes('timeout')) {
+                    console.error('⚠️  Error capturando frame:', error.message);
+                }
+                
+                // Reintentar después de un breve delay
                 if (isStreaming) {
-                    setTimeout(captureAndStream, frameInterval);
+                    setTimeout(captureAndStream, frameInterval * 2); // Esperar el doble si hay error
                 }
             }
         };
