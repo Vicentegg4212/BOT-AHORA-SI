@@ -24,17 +24,18 @@ const KICK_STREAM_KEY = 'sk_us-west-2_qaJSZ28Skfyc_EFop1LvD87ltP2cMSZSVPVObXxa56
 const KICK_RTMPS_URL = 'rtmps://fa723fc1b171.global-contribute.live-video.net';
 const STREAM_URL = `${KICK_RTMPS_URL}/app/${KICK_STREAM_KEY}`;
 
-// Configuración de streaming (optimizado)
+// Configuración de streaming (optimizado para 4GB RAM)
 const STREAM_DURATION = 0; // 0 = infinito (24 horas)
-const FPS = 15; // FPS estable
-const RESOLUTION = '1920x1080';
-const BITRATE = '2000k';
+const FPS = 10; // FPS reducido para menor uso de RAM
+const RESOLUTION = '1280x720'; // Resolución reducida (720p en lugar de 1080p)
+const BITRATE = '1500k'; // Bitrate reducido
 const MAX_RETRIES = 10;
 const RETRY_DELAY = 5000;
 
-// Configuración de captura
-const SCREENSHOT_QUALITY = 70;
-const SCREENSHOT_TIMEOUT = 10000;
+// Configuración de captura (optimizado para RAM)
+const SCREENSHOT_QUALITY = 60; // Calidad reducida
+const SCREENSHOT_TIMEOUT = 8000;
+const MAX_BUFFER_SIZE = 512 * 1024; // Buffer máximo 512KB (reducido)
 
 // ═══════════════════════════════════════════════════════════════════════════
 // FUNCIÓN PRINCIPAL
@@ -48,6 +49,7 @@ async function streamSasepaToKick(retryCount = 0) {
     console.log(`🔑 Stream Key: ${KICK_STREAM_KEY.substring(0, 30)}...`);
     console.log(`⏱️  Duración: ${STREAM_DURATION > 0 ? STREAM_DURATION + ' segundos' : '24 HORAS CONTINUAS'}`);
     console.log(`📊 Config: ${FPS} fps, ${RESOLUTION}, ${BITRATE} bitrate`);
+console.log(`💾 Optimizado para: 4GB RAM máximo`);
     if (retryCount > 0) {
         console.log(`🔄 Reintento #${retryCount}`);
     }
@@ -63,27 +65,36 @@ async function streamSasepaToKick(retryCount = 0) {
         // INICIALIZAR NAVEGADOR
         // ═══════════════════════════════════════════════════════════════════
         
-        console.log('🌐 Iniciando navegador...');
+        console.log('🌐 Iniciando navegador (optimizado para 4GB RAM)...');
         browser = await puppeteer.launch({
             headless: 'new',
             args: [
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
                 '--disable-dev-shm-usage',
-                '--window-size=1920,1080',
+                '--window-size=1280,720', // Resolución reducida
                 '--disable-blink-features=AutomationControlled',
                 '--autoplay-policy=no-user-gesture-required',
                 '--disable-gpu',
                 '--disable-software-rasterizer',
                 '--disable-extensions',
                 '--disable-plugins',
-                '--disable-images' // Desactivar imágenes para mejor rendimiento
+                '--disable-images',
+                '--disable-javascript-harmony-shipping',
+                '--disable-background-networking',
+                '--disable-background-timer-throttling',
+                '--disable-renderer-backgrounding',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-ipc-flooding-protection',
+                '--js-flags=--max-old-space-size=512', // Limitar memoria de JS a 512MB
+                '--memory-pressure-off',
+                '--max_old_space_size=512'
             ]
         });
 
         page = await browser.newPage();
         await page.setJavaScriptEnabled(true);
-        await page.setViewport({ width: 1920, height: 1080 });
+        await page.setViewport({ width: 1280, height: 720 }); // Viewport reducido
 
         // ═══════════════════════════════════════════════════════════════════
         // CONFIGURAR GEOLOCALIZACIÓN
@@ -162,18 +173,21 @@ async function streamSasepaToKick(retryCount = 0) {
             '-vcodec', 'mjpeg',
             '-framerate', String(FPS),
             '-i', 'pipe:0',
+            '-s', RESOLUTION, // Forzar resolución
             '-c:v', 'libx264',
             '-preset', 'ultrafast',
             '-tune', 'zerolatency',
             '-b:v', BITRATE,
             '-maxrate', BITRATE,
-            '-bufsize', String(parseInt(BITRATE) * 2) + 'k',
+            '-bufsize', String(parseInt(BITRATE) * 1.5) + 'k', // Buffer reducido
             '-g', String(FPS * 2),
             '-keyint_min', String(FPS),
             '-sc_threshold', '0',
             '-profile:v', 'baseline',
             '-pix_fmt', 'yuv420p',
-            '-threads', '2',
+            '-threads', '1', // Un solo thread para menor RAM
+            '-thread_type', 'slice',
+            '-x264opts', 'threads=1:thread-input=1:thread-lookahead=1', // Optimización de threads
             '-f', 'flv',
             '-flvflags', 'no_duration_filesize',
             STREAM_URL
@@ -245,12 +259,19 @@ async function streamSasepaToKick(retryCount = 0) {
                 let screenshotBuffer = null;
                 
                 try {
+                    // Captura optimizada para bajo uso de RAM
                     screenshotBuffer = await page.screenshot({
                         fullPage: false,
                         encoding: 'binary',
                         type: 'jpeg',
                         quality: SCREENSHOT_QUALITY,
-                        timeout: SCREENSHOT_TIMEOUT
+                        timeout: SCREENSHOT_TIMEOUT,
+                        clip: {
+                            x: 0,
+                            y: 0,
+                            width: 1280,
+                            height: 720
+                        }
                     });
                 } catch (screenshotError) {
                     // Reintentar con configuración más simple
@@ -259,7 +280,7 @@ async function streamSasepaToKick(retryCount = 0) {
                             fullPage: false,
                             encoding: 'binary',
                             type: 'jpeg',
-                            quality: 60,
+                            quality: 50, // Calidad aún más baja
                             timeout: SCREENSHOT_TIMEOUT
                         });
                     } catch (retryError) {
@@ -272,27 +293,52 @@ async function streamSasepaToKick(retryCount = 0) {
                 }
 
                 if (screenshotBuffer && ffmpegProcess.stdin && !ffmpegProcess.stdin.destroyed) {
-                    // Verificar buffer antes de escribir
-                    if (ffmpegProcess.stdin.writableLength < 1024 * 1024) {
-                        ffmpegProcess.stdin.write(screenshotBuffer, (err) => {
+                    // Verificar buffer antes de escribir (reducido para 4GB RAM)
+                    if (ffmpegProcess.stdin.writableLength < MAX_BUFFER_SIZE) {
+                        const written = ffmpegProcess.stdin.write(screenshotBuffer, (err) => {
                             if (err && err.message !== 'write EPIPE') {
                                 // Ignorar errores de pipe cerrado
                             }
                         });
+                        
+                        // Si el buffer está lleno, esperar
+                        if (!written) {
+                            await new Promise(resolve => {
+                                ffmpegProcess.stdin.once('drain', resolve);
+                                setTimeout(resolve, 100); // Timeout de seguridad
+                            });
+                        }
                     } else {
-                        await new Promise(resolve => setTimeout(resolve, 50));
+                        // Buffer lleno, esperar más tiempo
+                        await new Promise(resolve => setTimeout(resolve, 100));
                     }
+                    
+                    // Limpiar referencia para ayudar al GC
+                    screenshotBuffer = null;
                 }
 
                 frameCount++;
                 const frameTime = Date.now() - frameStartTime;
 
-                // Mostrar progreso cada 5 segundos
-                if (frameCount % (FPS * 5) === 0) {
+                // Mostrar progreso cada 10 segundos (menos frecuente para ahorrar recursos)
+                if (frameCount % (FPS * 10) === 0) {
                     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
                     const fpsActual = (frameCount / elapsed).toFixed(1);
                     const avgFrameTime = (frameTime).toFixed(0);
-                    console.log(`📹 Transmitiendo... ${frameCount} frames | ${elapsed}s | ${fpsActual} fps | Frame: ${avgFrameTime}ms`);
+                    
+                    // Mostrar uso de memoria si está disponible
+                    const memUsage = process.memoryUsage();
+                    const memMB = (memUsage.heapUsed / 1024 / 1024).toFixed(1);
+                    
+                    console.log(`📹 Transmitiendo... ${frameCount} frames | ${elapsed}s | ${fpsActual} fps | Frame: ${avgFrameTime}ms | RAM: ${memMB}MB`);
+                    
+                    // Forzar garbage collection si el uso de RAM es alto
+                    if (memUsage.heapUsed > 3 * 1024 * 1024 * 1024) { // Más de 3GB
+                        if (global.gc) {
+                            global.gc();
+                            console.log('🧹 Garbage collection ejecutado');
+                        }
+                    }
                 }
 
                 // Verificar duración
