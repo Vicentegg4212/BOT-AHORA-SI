@@ -60,11 +60,25 @@ async function streamToKick(retryCount = 0) {
         console.log('📡 Navegando a YouTube...');
         console.log(`🎥 Video: ${YOUTUBE_URL}`);
         
-        // Navegar a YouTube
+        // Navegar a YouTube con comportamiento humano
+        console.log('📡 Navegando a YouTube (simulando navegador real)...');
+        
+        // Primero ir a google.com para parecer más natural
+        await page.goto('https://www.google.com', {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000
+        });
+        await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+        
+        // Luego navegar a YouTube
         await page.goto(YOUTUBE_URL, {
             waitUntil: 'networkidle2',
             timeout: 30000
         });
+        
+        // Simular movimiento de mouse aleatorio
+        await page.mouse.move(Math.random() * 1280, Math.random() * 720);
+        await new Promise(resolve => setTimeout(resolve, 500));
 
         // Esperar a que cargue completamente
         await page.evaluate(() => {
