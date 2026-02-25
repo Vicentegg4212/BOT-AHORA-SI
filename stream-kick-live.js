@@ -21,8 +21,8 @@ const RESOLUTION = '1920x1080';
 const BITRATE = '2000k'; // Reducido para mejor rendimiento
 const MAX_RETRIES = 10; // Intentos de reconexión
 const RETRY_DELAY = 5000; // 5 segundos entre reintentos
-const SCREENSHOT_QUALITY = 80; // Calidad de screenshot (más rápido)
-const SCREENSHOT_TIMEOUT = 5000; // Timeout para screenshots
+const SCREENSHOT_QUALITY = 70; // Calidad de screenshot (más rápido)
+const SCREENSHOT_TIMEOUT = 10000; // Timeout aumentado para screenshots
 
 async function streamToKick(retryCount = 0) {
     console.log('\n' + '='.repeat(60));
@@ -275,7 +275,7 @@ async function streamToKick(retryCount = 0) {
         const ffmpegArgs = [
             '-y',
             '-f', 'image2pipe',
-            '-vcodec', 'png',
+            '-vcodec', 'mjpeg', // Cambiado a mjpeg para JPEG
             '-framerate', String(FPS),
             '-i', 'pipe:0',
             '-c:v', 'libx264',
@@ -361,31 +361,35 @@ async function streamToKick(retryCount = 0) {
             const frameStartTime = Date.now();
             
             try {
-                // Capturar screenshot optimizado (más rápido)
-                const screenshotBuffer = await Promise.race([
-                    page.screenshot({
+                // Capturar screenshot optimizado (más rápido y robusto)
+                let screenshotBuffer = null;
+                
+                try {
+                    screenshotBuffer = await page.screenshot({
                         fullPage: false,
                         encoding: 'binary',
+                        type: 'jpeg', // JPEG es más rápido que PNG
                         quality: SCREENSHOT_QUALITY,
-                        type: 'png',
-                        clip: {
-                            x: 0,
-                            y: 0,
-                            width: 1920,
-                            height: 1080
-                        }
-                    }),
-                    new Promise((_, reject) => 
-                        setTimeout(() => reject(new Error('Screenshot timeout')), SCREENSHOT_TIMEOUT)
-                    )
-                ]).catch(async (error) => {
-                    // Si hay error, intentar una vez más con configuración más simple
-                    console.log('⚠️  Reintentando captura...');
-                    return await page.screenshot({
-                        fullPage: false,
-                        encoding: 'binary'
-                    }).catch(() => null);
-                });
+                        timeout: SCREENSHOT_TIMEOUT
+                    });
+                } catch (screenshotError) {
+                    // Si falla, intentar método alternativo sin clip
+                    try {
+                        screenshotBuffer = await page.screenshot({
+                            fullPage: false,
+                            encoding: 'binary',
+                            type: 'jpeg',
+                            quality: 60,
+                            timeout: SCREENSHOT_TIMEOUT
+                        });
+                    } catch (retryError) {
+                        // Si sigue fallando, usar método básico
+                        screenshotBuffer = await page.screenshot({
+                            encoding: 'binary',
+                            timeout: SCREENSHOT_TIMEOUT
+                        }).catch(() => null);
+                    }
+                }
 
                 if (screenshotBuffer && ffmpegProcess.stdin && !ffmpegProcess.stdin.destroyed) {
                     // Verificar que el pipe no esté lleno antes de escribir
