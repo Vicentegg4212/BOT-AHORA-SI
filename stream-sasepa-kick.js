@@ -99,7 +99,11 @@ console.log(`💾 Optimizado para: 4GB RAM máximo`);
                 '--disable-ipc-flooding-protection',
                 '--js-flags=--max-old-space-size=512', // Limitar memoria de JS a 512MB
                 '--memory-pressure-off',
-                '--max_old_space_size=512'
+                '--max_old_space_size=512',
+                // Anti-detección de bot
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             ]
         });
 
