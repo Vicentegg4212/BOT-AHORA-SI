@@ -36,12 +36,26 @@ let isStreaming = false;
 
 // Crear servidor Express
 const app = express();
+
+// Habilitar CORS para todas las rutas
+app.use((req, res, next) => {
+    res.header('Access-Control-Allow-Origin', '*');
+    res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    if (req.method === 'OPTIONS') {
+        return res.sendStatus(200);
+    }
+    next();
+});
+
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: {
         origin: "*",
-        methods: ["GET", "POST"]
-    }
+        methods: ["GET", "POST"],
+        credentials: true
+    },
+    transports: ['websocket', 'polling']
 });
 
 // Servir página HTML para ver el stream
@@ -296,7 +310,7 @@ process.on('SIGINT', async () => {
 });
 
 // Iniciar servidor
-server.listen(PORT, async () => {
+server.listen(PORT, '0.0.0.0', async () => {
     console.log(`\n╔══════════════════════════════════════════════════════════════╗`);
     console.log(`║     STREAM LIVE SASEPA.MX - PUPPETEER                        ║`);
     console.log(`╚══════════════════════════════════════════════════════════════╝`);
