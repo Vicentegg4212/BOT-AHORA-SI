@@ -105,7 +105,64 @@ console.log(`💾 Optimizado para: 4GB RAM máximo`);
 
         page = await browser.newPage();
         await page.setJavaScriptEnabled(true);
-        await page.setViewport({ width: 1280, height: 720 }); // Viewport reducido
+        await page.setViewport({ width: 1280, height: 720 });
+        
+        // ═══════════════════════════════════════════════════════════════════
+        // ANTI-DETECCIÓN DE BOT (Para evitar bloqueos)
+        // ═══════════════════════════════════════════════════════════════════
+        
+        console.log('🛡️  Configurando anti-detección de bot...');
+        
+        // Ocultar webdriver
+        await page.evaluateOnNewDocument(() => {
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => false,
+            });
+            
+            // Modificar navigator.plugins
+            Object.defineProperty(navigator, 'plugins', {
+                get: () => [1, 2, 3, 4, 5],
+            });
+            
+            // Modificar navigator.languages
+            Object.defineProperty(navigator, 'languages', {
+                get: () => ['es-ES', 'es', 'en-US', 'en'],
+            });
+            
+            // Modificar permissions
+            const originalQuery = window.navigator.permissions.query;
+            window.navigator.permissions.query = (parameters) => (
+                parameters.name === 'notifications' ?
+                    Promise.resolve({ state: Notification.permission }) :
+                    originalQuery(parameters)
+            );
+            
+            // Agregar chrome object
+            window.chrome = {
+                runtime: {},
+                loadTimes: function() {},
+                csi: function() {},
+                app: {}
+            };
+        });
+        
+        // User-Agent realista
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
+        
+        // Headers adicionales para parecer navegador real
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'es-ES,es;q=0.9,en-US;q=0.8,en;q=0.7',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Cache-Control': 'max-age=0'
+        });
+        
+        console.log('✅ Anti-detección configurado'); // Viewport reducido
 
         // ═══════════════════════════════════════════════════════════════════
         // CONFIGURAR GEOLOCALIZACIÓN
@@ -122,14 +179,27 @@ console.log(`💾 Optimizado para: 4GB RAM máximo`);
         console.log('✅ Geolocalización: Ciudad de México (19.4326, -99.1332)');
 
         // ═══════════════════════════════════════════════════════════════════
-        // NAVEGAR A SASEPA
+        // NAVEGAR A SASEPA (Con comportamiento humano)
         // ═══════════════════════════════════════════════════════════════════
         
         console.log('📡 Navegando a https://www.sasepa.mx/...');
+        
+        // Simular comportamiento humano: primero ir a google
+        await page.goto('https://www.google.com', {
+            waitUntil: 'domcontentloaded',
+            timeout: 15000
+        });
+        await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+        
+        // Luego navegar a SASEPA
         await page.goto('https://www.sasepa.mx/', {
             waitUntil: 'networkidle2',
             timeout: 30000
         });
+        
+        // Simular movimiento de mouse aleatorio
+        await page.mouse.move(Math.random() * 1280, Math.random() * 720);
+        await new Promise(resolve => setTimeout(resolve, 500));
 
         // Esperar carga completa
         await page.evaluate(() => {
