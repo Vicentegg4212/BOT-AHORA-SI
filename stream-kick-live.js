@@ -52,18 +52,14 @@ async function streamToKick(retryCount = 0) {
         await page.setJavaScriptEnabled(true);
         await page.setViewport({ width: 1920, height: 1080 });
 
-        // Configurar geolocalización
-        const context = browser.defaultBrowserContext();
-        await context.overridePermissions('https://www.sasepa.mx', ['geolocation']);
-        await page.setGeolocation({
-            latitude: 19.4326,
-            longitude: -99.1332,
-            accuracy: 10
-        });
-        console.log('📍 Geolocalización configurada: Ciudad de México (19.4326, -99.1332)');
-
-        console.log('📡 Navegando a https://www.sasepa.mx/...');
-        await page.goto('https://www.sasepa.mx/', {
+        // URL del video de YouTube
+        const YOUTUBE_URL = 'https://www.youtube.com/watch?v=3CMVAtg8BTM';
+        
+        console.log('📡 Navegando a YouTube...');
+        console.log(`🎥 Video: ${YOUTUBE_URL}`);
+        
+        // Navegar a YouTube
+        await page.goto(YOUTUBE_URL, {
             waitUntil: 'networkidle2',
             timeout: 30000
         });
@@ -76,33 +72,93 @@ async function streamToKick(retryCount = 0) {
             });
         });
         
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        console.log('✅ Página cargada completamente');
+        await new Promise(resolve => setTimeout(resolve, 5000));
+        console.log('✅ Página de YouTube cargada');
 
-        // Activar botón de alerta sísmica
-        console.log('🔴 Buscando y activando botón de alerta sísmica...');
+        // Aceptar cookies si aparece
         try {
-            const buttonClicked = await page.evaluate(() => {
-                const buttons = Array.from(document.querySelectorAll('button, a, [role="button"], [onclick]'));
-                for (const btn of buttons) {
-                    const text = (btn.textContent || '').toLowerCase().trim();
-                    if ((text.includes('alerta') || text.includes('alert')) && 
-                        (text.includes('sísmica') || text.includes('sismica') || text.includes('sismic'))) {
-                        btn.click();
-                        return { clicked: true, text: btn.textContent };
+            await page.evaluate(() => {
+                const acceptButton = Array.from(document.querySelectorAll('button')).find(btn => 
+                    btn.textContent?.includes('Aceptar') || 
+                    btn.textContent?.includes('Accept') ||
+                    btn.textContent?.includes('Acepto')
+                );
+                if (acceptButton) {
+                    acceptButton.click();
+                    return true;
+                }
+                return false;
+            });
+            await new Promise(resolve => setTimeout(resolve, 2000));
+        } catch (e) {}
+
+        // Reproducir el video y poner en pantalla completa
+        console.log('▶️  Reproduciendo video y configurando pantalla completa...');
+        
+        try {
+            // Esperar a que el reproductor esté listo
+            await page.waitForSelector('video', { timeout: 10000 });
+            
+            // Reproducir el video
+            await page.evaluate(() => {
+                const video = document.querySelector('video');
+                if (video) {
+                    video.play();
+                    // Saltar anuncios si es posible
+                    const skipButton = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button');
+                    if (skipButton) {
+                        skipButton.click();
                     }
                 }
-                return { clicked: false };
             });
             
-            if (buttonClicked.clicked) {
-                console.log(`✅ Botón activado: "${buttonClicked.text}"`);
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            } else {
-                console.log('⚠️  No se encontró el botón de alerta sísmica');
-            }
+            await new Promise(resolve => setTimeout(resolve, 3000));
+
+            // Intentar poner en pantalla completa
+            await page.evaluate(() => {
+                const video = document.querySelector('video');
+                if (video) {
+                    // Intentar entrar en pantalla completa
+                    if (video.requestFullscreen) {
+                        video.requestFullscreen();
+                    } else if (video.webkitRequestFullscreen) {
+                        video.webkitRequestFullscreen();
+                    } else if (video.mozRequestFullScreen) {
+                        video.mozRequestFullScreen();
+                    } else if (video.msRequestFullscreen) {
+                        video.msRequestFullscreen();
+                    }
+                    
+                    // También intentar con el botón de YouTube
+                    const fullscreenButton = document.querySelector('.ytp-fullscreen-button');
+                    if (fullscreenButton) {
+                        fullscreenButton.click();
+                    }
+                }
+            });
+            
+            console.log('✅ Video en reproducción');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+
+            // Configurar para saltar anuncios automáticamente
+            await page.evaluate(() => {
+                // Observar y saltar anuncios
+                const observer = new MutationObserver(() => {
+                    const skipButton = document.querySelector('.ytp-ad-skip-button, .ytp-skip-ad-button');
+                    if (skipButton && skipButton.offsetParent !== null) {
+                        skipButton.click();
+                    }
+                });
+                
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true
+                });
+            });
+
         } catch (error) {
-            console.log('⚠️  Error al buscar botón:', error.message);
+            console.log('⚠️  Error configurando video:', error.message);
+            console.log('💡 Continuando con la transmisión...');
         }
 
         console.log('\n🎥 Iniciando transmisión EN VIVO a Kick...');
