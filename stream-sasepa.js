@@ -32,10 +32,24 @@ async function streamSasepa() {
     });
 
     try {
+        const context = browser.defaultBrowserContext();
         const page = await browser.newPage();
         
-        // Activar JavaScript explícitamente (ya está activado por defecto, pero lo confirmamos)
+        // Activar JavaScript explícitamente
         await page.setJavaScriptEnabled(true);
+        
+        // Configurar permisos de geolocalización ANTES de navegar
+        console.log('📍 Configurando permisos de geolocalización...');
+        await context.overridePermissions('https://www.sasepa.mx', ['geolocation']);
+        
+        // Establecer ubicación (Ciudad de México como ejemplo)
+        const mexicoCityCoords = {
+            latitude: 19.4326,
+            longitude: -99.1332,
+            accuracy: 10
+        };
+        await page.setGeolocation(mexicoCityCoords);
+        console.log(`✅ Ubicación configurada: Ciudad de México (${mexicoCityCoords.latitude}, ${mexicoCityCoords.longitude})`);
         
         // Configurar viewport
         await page.setViewport({
@@ -65,6 +79,141 @@ async function streamSasepa() {
         
         // Esperar un poco más para que las animaciones y scripts dinámicos se ejecuten
         await new Promise(resolve => setTimeout(resolve, 3000));
+        
+        // Buscar y hacer clic en el botón de alerta sísmica
+        console.log('🔴 Buscando botón de alerta sísmica...');
+        try {
+            // Intentar diferentes selectores posibles para el botón
+            const buttonSelectors = [
+                'button:has-text("Alerta Sísmica")',
+                'button:has-text("alerta sísmica")',
+                'button:has-text("Probar Alerta Sísmica")',
+                'button[class*="alerta"]',
+                'button[class*="sismica"]',
+                'button[class*="alert"]',
+                'button[id*="alerta"]',
+                'button[id*="sismica"]',
+                'a:has-text("Alerta Sísmica")',
+                'a:has-text("alerta sísmica")',
+                '[role="button"]:has-text("Alerta Sísmica")',
+                '.btn:has-text("Alerta")',
+                '[class*="btn"]:has-text("Sísmica")'
+            ];
+            
+            let buttonClicked = false;
+            
+            // Buscar por texto en el DOM
+            const buttonFound = await page.evaluate(() => {
+                const buttons = Array.from(document.querySelectorAll('button, a, [role="button"], [onclick]'));
+                for (const btn of buttons) {
+                    const text = btn.textContent?.toLowerCase() || '';
+                    const innerHTML = btn.innerHTML?.toLowerCase() || '';
+                    if (text.includes('alerta') && text.includes('sísmica') || 
+                        text.includes('alerta') && text.includes('sismica') ||
+                        innerHTML.includes('alerta') && innerHTML.includes('sísmica')) {
+                        return {
+                            found: true,
+                            text: btn.textContent,
+                            tag: btn.tagName,
+                            className: btn.className,
+                            id: btn.id
+                        };
+                    }
+                }
+                return { found: false };
+            });
+            
+            if (buttonFound.found) {
+                console.log(`✅ Botón encontrado: "${buttonFound.text}" (${buttonFound.tag})`);
+                
+                // Intentar hacer clic usando diferentes métodos
+                const clickSuccess = await page.evaluate(() => {
+                    const buttons = Array.from(document.querySelectorAll('button, a, [role="button"], [onclick]'));
+                    for (const btn of buttons) {
+                        const text = btn.textContent?.toLowerCase() || '';
+                        if (text.includes('alerta') && (text.includes('sísmica') || text.includes('sismica'))) {
+                            btn.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                });
+                
+                if (clickSuccess) {
+                    console.log('✅ Clic realizado en el botón de alerta sísmica');
+                    buttonClicked = true;
+                } else {
+                    // Intentar con selector más específico
+                    const clicked = await page.evaluate((text) => {
+                        const xpath = `//button[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '${text}')]`;
+                        const result = document.evaluate(xpath, document, null, XPathResult.FIRST_ORDERED_NODE_TYPE, null);
+                        const button = result.singleNodeValue;
+                        if (button) {
+                            button.click();
+                            return true;
+                        }
+                        return false;
+                    }, 'alerta sísmica');
+                    
+                    if (clicked) {
+                        console.log('✅ Clic realizado usando XPath');
+                        buttonClicked = true;
+                    }
+                }
+            }
+            
+            // Si no se encontró, intentar buscar por color rojo o por posición
+            if (!buttonClicked) {
+                console.log('🔍 Buscando botón por características visuales...');
+                const redButton = await page.evaluate(() => {
+                    const buttons = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+                    for (const btn of buttons) {
+                        const style = window.getComputedStyle(btn);
+                        const bgColor = style.backgroundColor;
+                        const color = style.color;
+                        // Buscar botones rojos
+                        if (bgColor.includes('rgb(255') || bgColor.includes('rgb(220') || 
+                            bgColor.includes('rgb(200') || color.includes('rgb(255')) {
+                            const text = btn.textContent?.toLowerCase() || '';
+                            if (text.includes('alerta') || text.includes('sismica') || text.includes('sísmica')) {
+                                btn.click();
+                                return true;
+                            }
+                        }
+                    }
+                    return false;
+                });
+                
+                if (redButton) {
+                    console.log('✅ Botón rojo encontrado y clickeado');
+                    buttonClicked = true;
+                }
+            }
+            
+            if (!buttonClicked) {
+                console.log('⚠️  No se pudo encontrar el botón automáticamente. Intentando método alternativo...');
+                // Intentar hacer clic en cualquier botón que contenga "alerta" o "sísmica"
+                await page.evaluate(() => {
+                    const allElements = document.querySelectorAll('*');
+                    for (const el of allElements) {
+                        const text = el.textContent?.toLowerCase() || '';
+                        if ((text.includes('alerta') || text.includes('sismica') || text.includes('sísmica')) && 
+                            (el.tagName === 'BUTTON' || el.tagName === 'A' || el.onclick)) {
+                            el.click();
+                            return;
+                        }
+                    }
+                });
+            }
+            
+            // Esperar a que se procese el clic
+            console.log('⏳ Esperando a que se active la alerta...');
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+        } catch (buttonError) {
+            console.log('⚠️  Error al buscar el botón:', buttonError.message);
+            console.log('💡 Continuando con la grabación...');
+        }
 
         // Configuración de grabación
         const duration = 60; // segundos (1 minuto)
